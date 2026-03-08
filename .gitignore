@@ -6,3 +6,7 @@ coach_log.txt
 ngrok.exe
 ngrok-new.zip
 *.garth
+*.db
+*.old
+Coach Codes.txt
+ngrok*
