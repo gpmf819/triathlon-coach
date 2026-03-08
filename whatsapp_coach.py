@@ -134,4 +134,4 @@ def health():
 if __name__ == "__main__":
     print("🏊 Triathlon Coach WhatsApp Server starting...")
     print("Make sure ngrok is running: ngrok http 5000")
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
