@@ -1,1 +1,1 @@
-web: gunicorn whatsapp_coach:app --bind 0.0.0.0:$PORT
+web: gunicorn whatsapp_coach:app --bind "0.0.0.0:${PORT:-8080}"
