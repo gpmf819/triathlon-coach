@@ -1,1 +1,1 @@
-web: python whatsapp_coach.py
+web: gunicorn whatsapp_coach:app
