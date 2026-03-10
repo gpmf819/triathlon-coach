@@ -19,7 +19,7 @@ def get_fitness_data():
     today = date.today().isoformat()
     week_ago = (date.today() - timedelta(days=7)).isoformat()
 
-    # Wellness (CTL/ATL/TSB/form)
+    # Wellness (CTL/ATL/TSB)
     wellness_url = f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/wellness"
     wellness = requests.get(
         wellness_url,
@@ -28,12 +28,16 @@ def get_fitness_data():
     )
     wellness.raise_for_status()
 
-    # Recent activities
+    # Activities with extended fields
     activities_url = f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities"
     activities = requests.get(
         activities_url,
         headers=cfg["headers"],
-        params={"oldest": week_ago, "newest": today}
+        params={
+            "oldest": week_ago,
+            "newest": today,
+            "fields": "type,name,start_date_local,moving_time,distance,average_heartrate,max_heartrate,average_watts,normalized_power,intensity_factor,tss,average_speed,suffer_score"
+        }
     )
     activities.raise_for_status()
 

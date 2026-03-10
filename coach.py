@@ -49,13 +49,42 @@ def summarize_intervals(intervals_data):
 
     recent = []
     for act in activities[:7]:
-        recent.append({
+        entry = {
             "date": act.get("start_date_local", "")[:10],
             "type": act.get("type"),
             "name": act.get("name"),
             "duration_min": (act.get("moving_time", 0) or 0) // 60,
             "distance_km": round((act.get("distance", 0) or 0) / 1000, 1),
-        })
+        }
+
+        # HR data
+        if act.get("average_heartrate"):
+            entry["avg_hr"] = round(act["average_heartrate"])
+        if act.get("max_heartrate"):
+            entry["max_hr"] = round(act["max_heartrate"])
+
+        # Bike power data
+        if act.get("average_watts"):
+            entry["avg_power"] = round(act["average_watts"])
+        if act.get("normalized_power"):
+            entry["normalized_power"] = round(act["normalized_power"])
+        if act.get("intensity_factor"):
+            entry["intensity_factor"] = round(act["intensity_factor"], 2)
+
+        # TSS
+        if act.get("tss"):
+            entry["tss"] = round(act["tss"])
+
+        # Run pace (convert m/s to min/km)
+        if act.get("average_speed") and act.get("type") in ["Run", "VirtualRun", "TrailRun"]:
+            speed_ms = act["average_speed"]
+            if speed_ms > 0:
+                pace_sec_per_km = 1000 / speed_ms
+                mins = int(pace_sec_per_km // 60)
+                secs = int(pace_sec_per_km % 60)
+                entry["avg_pace"] = f"{mins}:{secs:02d}/km"
+
+        recent.append(entry)
 
     return {
         "ctl": round(ctl, 1),
