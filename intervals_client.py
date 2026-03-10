@@ -28,7 +28,7 @@ def get_fitness_data():
     )
     wellness.raise_for_status()
 
-    # Activities with extended fields
+    # Activities list
     activities_url = f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities"
     activities = requests.get(
         activities_url,
@@ -36,14 +36,33 @@ def get_fitness_data():
         params={
             "oldest": week_ago,
             "newest": today,
-            "fields": "type,name,start_date_local,moving_time,distance,average_heartrate,max_heartrate,average_watts,normalized_power,intensity_factor,tss,average_speed,suffer_score"
+            "fields": "id,type,name,start_date_local,moving_time,distance,average_heartrate,max_heartrate,average_watts,normalized_power,intensity_factor,tss,average_speed,suffer_score"
         }
     )
     activities.raise_for_status()
+    acts = activities.json()
+
+    # For bike activities, fetch full detail to get power data
+    bike_types = ["Ride", "VirtualRide", "MountainBikeRide", "GravelRide"]
+    enriched = []
+    for act in acts:
+        if act.get("type") in bike_types and act.get("id"):
+            try:
+                detail = requests.get(
+                    f"{cfg['base_url']}/activity/{act['id']}",
+                    headers=cfg["headers"]
+                ).json()
+                act["average_watts"] = detail.get("icu_average_watts")
+                act["normalized_power"] = detail.get("icu_weighted_avg_watts")
+                act["intensity_factor"] = round(detail.get("icu_intensity", 0) / 100, 2) if detail.get("icu_intensity") else None
+                act["tss"] = detail.get("icu_training_load")
+            except Exception:
+                pass
+        enriched.append(act)
 
     return {
         "wellness": wellness.json(),
-        "recent_activities": activities.json()
+        "recent_activities": enriched
     }
 
 def get_athlete_profile():
