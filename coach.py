@@ -69,6 +69,9 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     garmin_summary = summarize_garmin(garmin_data)
+    from intervals_client import get_athlete_profile, summarize_athlete_profile
+    raw_profile = get_athlete_profile()
+    athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
 
     if athlete_profile is None:
@@ -94,13 +97,19 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     prompt = f"""You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
 
 ## Athlete Profile
-- Name: {athlete_profile['name']}, Age group: {athlete_profile['age_group']}
+- Name: {athlete_profile['name']}, Age: 44, Male, 75kg
 - Target race: {athlete_profile['target_race']} on {athlete_profile['race_date']} ({athlete_profile['weeks_to_race']} weeks away)
-- Previous best at this race: {athlete_profile['previous_best']}
-- Goal: {athlete_profile['goal']}
-- Current phase: {athlete_profile['current_phase']}
-- Available equipment: {athlete_profile['available_equipment']}
-- Notes: {athlete_profile['notes']}
+- Previous best: Total 2:44:39 | Swim 0:28:39 | Bike 1:16:33 | Run 0:51:00 (9th AG)
+- Goal: Top 5 age group finish
+
+## Athlete Physiology
+- Resting HR: {athlete_metrics['resting_hr']} bpm | Max HR: {athlete_metrics['bike']['max_hr']} bpm
+- Bike FTP: {athlete_metrics['bike']['ftp']}W (confirmed ramp test)
+- Bike LTHR: {athlete_metrics['bike']['lthr']} bpm
+- Bike power zones: {dict(zip(athlete_metrics['bike']['power_zone_names'], athlete_metrics['bike']['power_zones']))}
+- Run LTHR: {athlete_metrics['run']['lthr']} bpm
+- Run HR zones: {athlete_metrics['run']['hr_zones']}
+- Swim threshold pace: {athlete_metrics['swim']['threshold_pace_per_100m']}
 
 ## Today's Readiness (from Garmin)
 - Sleep duration: {garmin_summary.get('sleep_duration_hours')} hours

@@ -41,3 +41,43 @@ def get_fitness_data():
         "wellness": wellness.json(),
         "recent_activities": activities.json()
     }
+
+def get_athlete_profile():
+    cfg = get_headers()
+    url = f"{cfg['base_url']}/athlete/{cfg['athlete_id']}"
+    response = requests.get(url, headers=cfg["headers"])
+    response.raise_for_status()
+    return response.json()
+
+def summarize_athlete_profile(profile):
+    """Extract key coaching metrics from athlete profile."""
+    bike_settings = next((s for s in profile.get("sportSettings", []) 
+                         if "Ride" in s.get("types", [])), {})
+    run_settings = next((s for s in profile.get("sportSettings", []) 
+                        if "Run" in s.get("types", [])), {})
+    swim_settings = next((s for s in profile.get("sportSettings", []) 
+                         if "Swim" in s.get("types", [])), {})
+
+    return {
+        "weight_kg": profile.get("icu_weight"),
+        "resting_hr": profile.get("icu_resting_hr"),
+        "dob": profile.get("icu_date_of_birth"),
+        "bike": {
+            "ftp": 291,  # confirmed via ramp test, overrides Intervals value of 270
+            "lthr": bike_settings.get("lthr"),
+            "max_hr": bike_settings.get("max_hr"),
+            "power_zones": bike_settings.get("power_zones"),
+            "power_zone_names": bike_settings.get("power_zone_names"),
+            "hr_zones": bike_settings.get("hr_zones"),
+        },
+        "run": {
+            "lthr": run_settings.get("lthr"),
+            "max_hr": run_settings.get("max_hr"),
+            "hr_zones": run_settings.get("hr_zones"),
+            "threshold_pace": run_settings.get("threshold_pace"),
+        },
+        "swim": {
+            "threshold_pace_per_100m": "1:55/100m",
+            "max_hr": swim_settings.get("max_hr"),
+        }
+    }
