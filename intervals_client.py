@@ -146,7 +146,6 @@ def get_weekly_summary():
     cfg = get_headers()
     today = date.today()
 
-    # Start of current week (Monday)
     days_since_monday = today.weekday()
     week_start = (today - timedelta(days=days_since_monday)).isoformat()
     week_end = today.isoformat()
@@ -158,7 +157,7 @@ def get_weekly_summary():
         params={
             "oldest": week_start,
             "newest": week_end,
-            "fields": "id,type,moving_time,distance,tss,average_heartrate"
+            "fields": "id,type,moving_time,distance,icu_training_load,average_heartrate"
         }
     )
     activities.raise_for_status()
@@ -168,7 +167,7 @@ def get_weekly_summary():
         "bike": {"count": 0, "duration_min": 0, "distance_km": 0, "tss": 0},
         "run": {"count": 0, "duration_min": 0, "distance_km": 0, "tss": 0},
         "swim": {"count": 0, "duration_min": 0, "distance_km": 0, "tss": 0},
-        "other": {"count": 0, "duration_min": 0},
+        "other": {"count": 0, "duration_min": 0, "tss": 0},
     }
 
     bike_types = ["Ride", "VirtualRide", "MountainBikeRide", "GravelRide"]
@@ -179,7 +178,7 @@ def get_weekly_summary():
     for act in acts:
         duration = (act.get("moving_time") or 0) // 60
         distance = round((act.get("distance") or 0) / 1000, 1)
-        tss = act.get("tss") or 0
+        tss = act.get("icu_training_load") or 0
         total_tss += tss
         t = act.get("type", "")
 
@@ -201,9 +200,16 @@ def get_weekly_summary():
         else:
             summary["other"]["count"] += 1
             summary["other"]["duration_min"] += duration
+            summary["other"]["tss"] += tss
+
+    days_done = days_since_monday + 1
+    days_remaining = 7 - days_done
 
     summary["total_tss"] = round(total_tss)
     summary["week_start"] = week_start
+    summary["days_done"] = days_done
+    summary["days_remaining"] = days_remaining
+
     return summary
 
 def get_ctl_trajectory():

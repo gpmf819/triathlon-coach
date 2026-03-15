@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -87,13 +87,14 @@ def get_coaching_context():
         garmin_summary = summarize_garmin(garmin_data)
         intervals_summary = summarize_intervals(intervals_data)
         ctl_data = get_ctl_trajectory()
-        return garmin_summary, intervals_summary, ctl_data
+        weekly = get_weekly_summary()
+        return garmin_summary, intervals_summary, ctl_data, weekly
     except Exception as e:
         print(f"Data fetch error: {e}")
-        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
+        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}, {}
 
 
-def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, ctl_data):
+def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, ctl_data, weekly):
     """Send message to Claude with full context and conversation history."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -121,6 +122,7 @@ CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {interv
 CTL 4-week trend: {ctl_trend_4w} ({ctl_data.get('trend_4w_direction', 'N/A')})
 YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_trend_yoy.get('2026')} (current)
 CTL target: 55-60 by race week — need +{ctl_gap} points in 13 weeks (~+{round(ctl_gap / 13, 1)}/week)
+Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
 Weeks to race: 15
 
@@ -156,8 +158,8 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
-    garmin_summary, intervals_summary, ctl_data = get_coaching_context()
-    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, ctl_data)
+    garmin_summary, intervals_summary, ctl_data, weekly = get_coaching_context()
+    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, ctl_data, weekly)
 
     print(f"Coach reply: {reply}")
 

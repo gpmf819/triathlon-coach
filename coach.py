@@ -102,7 +102,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 
     garmin_summary = summarize_garmin(garmin_data)
 
-    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library, get_ctl_trajectory
+    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library, get_ctl_trajectory, get_weekly_summary
     raw_profile = get_athlete_profile()
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
@@ -121,6 +121,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     trend_4w_str = " → ".join([str(v) for _, v in ctl_data['trend_4w']])
     trend_12w_str = " → ".join([str(v) for _, v in ctl_data['trend_12w']])
     yoy = ctl_data['yoy']
+    weekly = get_weekly_summary()
 
     if athlete_profile is None:
         athlete_profile = {
@@ -182,6 +183,13 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 - 4-week trend: {trend_4w_str} ({ctl_data['trend_4w_direction']})
 - 12-week trend: {trend_12w_str} ({ctl_data['trend_12w_direction']})
 - Target: CTL 55-60 by race week (June 13). Currently {ctl_data['current_ctl']} — need +{round(55 - ctl_data['current_ctl'], 1)} points in 13 weeks (~+{round((55 - ctl_data['current_ctl']) / 13, 1)}/week)
+
+## This Week's Training Summary (since {weekly['week_start']})
+- Bike: {weekly['bike']['count']} sessions | {weekly['bike']['duration_min']}min | TSS {weekly['bike']['tss']}
+- Run: {weekly['run']['count']} sessions | {weekly['run']['duration_min']}min | TSS {weekly['run']['tss']}
+- Swim: {weekly['swim']['count']} sessions | {weekly['swim']['duration_min']}min | TSS {weekly['swim']['tss']}
+- Other: {weekly['other']['count']} sessions | {weekly['other']['duration_min']}min | TSS {weekly['other']['tss']}
+- Total week TSS: {weekly['total_tss']} | Days done: {weekly['days_done']}/7
 
 ## Year-over-Year CTL (same week of March)
 - 2024: {yoy['2024']} | 2025: {yoy['2025']} | 2026: {yoy['2026']} (current)
