@@ -285,6 +285,11 @@ def nightly_push():
 def health():
     return "Coach is alive!", 200
 
+@app.route("/debug-env", methods=["GET"])
+def debug_env():
+    key = os.getenv("INTERVALS_API_KEY", "NOT SET")
+    athlete = os.getenv("INTERVALS_ATHLETE_ID", "NOT SET")
+    return f"Key: {key[:4]}...{key[-4:]} | Athlete: {athlete}", 200
 
 # Pre-warm cache at startup so first message is fast
 print("Pre-warming cache at startup...")
