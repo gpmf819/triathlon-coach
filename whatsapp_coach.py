@@ -17,34 +17,58 @@ app = Flask(__name__)
 # In-memory conversation state per user
 conversations = {}
 
-# Cache for slow data (workout library, CTL trajectory, athlete profile)
+# Cache for slow data (refreshed hourly at most)
 _cache = {
-    "workout_library": None,
     "workout_library_text": None,
     "system_prompt": None,
+    "ctl_data": None,
     "last_refreshed": 0,
 }
-CACHE_TTL_SECONDS = 3600  # refresh every hour
+CACHE_TTL_SECONDS = 3600  # 1 hour
 
 
-def get_cached_system_prompt():
-    """Return cached system prompt, rebuilding if stale."""
+def refresh_cache():
+    """Fetch slow data and rebuild system prompt. Called at startup and hourly."""
     now = time.time()
-    if _cache["system_prompt"] and (now - _cache["last_refreshed"]) < CACHE_TTL_SECONDS:
-        return _cache["system_prompt"]
 
-    print("Refreshing slow cache (workout library)...")
+    print("Refreshing cache (workout library + CTL trajectory)...")
+
     try:
         workout_library = get_workout_library()
         workout_library_text = "\n".join([
             f"- {w['zone']} | IF {w['median_if']} | NP {w['median_np']}W | TSS {w['median_tss']} | {w['median_duration_min']}min | {w['name']}"
             for w in workout_library
         ])
+        _cache["workout_library_text"] = workout_library_text
+        print("✓ Workout library loaded")
     except Exception as e:
-        print(f"Warning: Could not load workout library: {e}")
-        workout_library_text = _cache.get("workout_library_text") or "(library unavailable)"
+        print(f"Workout library error: {e}")
+        workout_library_text = _cache["workout_library_text"] or "(library unavailable)"
 
-    prompt = f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
+    try:
+        ctl_data = get_ctl_trajectory()
+        _cache["ctl_data"] = ctl_data
+        print("✓ CTL trajectory loaded")
+    except Exception as e:
+        print(f"CTL trajectory error: {e}")
+        ctl_data = _cache["ctl_data"] or {}
+
+    _cache["system_prompt"] = build_system_prompt(workout_library_text)
+    _cache["last_refreshed"] = now
+    print("Cache refresh complete.")
+
+
+def get_cached():
+    """Return cached data, refreshing if stale."""
+    now = time.time()
+    if _cache["system_prompt"] and (now - _cache["last_refreshed"]) < CACHE_TTL_SECONDS:
+        return _cache["system_prompt"], _cache["ctl_data"]
+    refresh_cache()
+    return _cache["system_prompt"], _cache["ctl_data"]
+
+
+def build_system_prompt(workout_library_text):
+    return f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
 
 ## Athlete Profile
 - Age: 44, Male, 75kg, Montreal-based
@@ -93,29 +117,22 @@ If only a Z2 ride is needed, say "free ride Zone 2" — do NOT invent a structur
 - Workout completed → acknowledge, note it, adjust outlook
 """
 
-    _cache["workout_library_text"] = workout_library_text
-    _cache["system_prompt"] = prompt
-    _cache["last_refreshed"] = now
-    print("Cache refreshed.")
-    return prompt
-
 
 def get_coaching_context():
-    """Fetch only fast/fresh data per message."""
+    """Fetch only fast/fresh data per message: Garmin, activities, weekly summary."""
     try:
         garmin_data = get_readiness_data()
         intervals_data = get_fitness_data()
         garmin_summary = summarize_garmin(garmin_data)
         intervals_summary = summarize_intervals(intervals_data)
         weekly = get_weekly_summary()
-        ctl_data = get_ctl_trajectory()
-        return garmin_summary, intervals_summary, weekly, ctl_data
+        return garmin_summary, intervals_summary, weekly
     except Exception as e:
         print(f"Data fetch error: {e}")
-        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}, {}
+        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
 
 
-def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data):
+def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
     """Send message to Claude with full context and conversation history."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -127,7 +144,7 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
-    # CTL trend strings
+    # CTL trend strings from cache
     ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
     ctl_trend_yoy = ctl_data.get('yoy', {})
     current_ctl = ctl_data.get('current_ctl') or 0
@@ -153,8 +170,6 @@ Weeks to race: 15
 
     history.append({"role": "user", "content": context_block})
 
-    system_prompt = get_cached_system_prompt()
-
     response = client.messages.create(
         model="claude-sonnet-4-5",
         max_tokens=600,
@@ -179,8 +194,17 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
-    garmin_summary, intervals_summary, weekly, ctl_data = get_coaching_context()
-    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, weekly, ctl_data)
+    # Fast fetches only
+    garmin_summary, intervals_summary, weekly = get_coaching_context()
+
+    # Slow data from cache
+    system_prompt, ctl_data = get_cached()
+
+    reply = chat_with_coach(
+        incoming_msg, from_number,
+        garmin_summary, intervals_summary,
+        weekly, ctl_data, system_prompt
+    )
 
     print(f"Coach reply: {reply}")
 
@@ -194,13 +218,12 @@ def health():
     return "Coach is alive!", 200
 
 
-# Pre-warm cache at startup
+# Pre-warm cache at startup so first message is fast
 print("Pre-warming cache at startup...")
 try:
-    get_cached_system_prompt()
-    print("Cache warmed successfully.")
+    refresh_cache()
 except Exception as e:
-    print(f"Cache warm failed (will retry on first request): {e}")
+    print(f"Startup cache warm failed (will retry on first request): {e}")
 
 
 if __name__ == "__main__":
