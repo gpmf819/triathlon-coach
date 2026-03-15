@@ -264,21 +264,29 @@ def whatsapp_webhook():
     return str(resp)
 
 
+import threading
+
 @app.route("/nightly", methods=["GET", "POST"])
 def nightly_push():
     """Called by Railway cron at 8pm ET to send tomorrow's workout."""
     print("Nightly push triggered...")
-    try:
-        garmin_summary, intervals_summary, weekly = get_coaching_context()
-        system_prompt, ctl_data = get_cached()
-        message = generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data, system_prompt)
-        athlete_phone = os.getenv("ATHLETE_PHONE")
-        send_whatsapp_message(athlete_phone, message)
-        print(f"Nightly push sent to {athlete_phone}")
-        return "OK", 200
-    except Exception as e:
-        print(f"Nightly push error: {e}")
-        return f"Error: {e}", 500
+    
+    def send_in_background():
+        try:
+            garmin_summary, intervals_summary, weekly = get_coaching_context()
+            system_prompt, ctl_data = get_cached()
+            message = generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data, system_prompt)
+            athlete_phone = os.getenv("ATHLETE_PHONE")
+            send_whatsapp_message(athlete_phone, message)
+            print(f"Nightly push sent to {athlete_phone}")
+        except Exception as e:
+            print(f"Nightly push background error: {e}")
+    
+    thread = threading.Thread(target=send_in_background)
+    thread.daemon = True
+    thread.start()
+    
+    return "Nightly push started", 200
 
 
 @app.route("/health", methods=["GET"])
