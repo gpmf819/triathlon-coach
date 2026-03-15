@@ -110,6 +110,11 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     today_str = datetime.now().strftime("%A, %B %d, %Y")
     tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
+    from datetime import date
+    race_date = date(2026, 6, 20)
+    weeks_to_race = (race_date - date.today()).days // 7
+    days_to_race = (race_date - date.today()).days
+
     # Build workout library text
     workout_library = get_workout_library()
     workout_library_text = "\n".join([
@@ -129,7 +134,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
             "age_group": "40-44",
             "target_race": "Tremblant 5150 (Olympic distance)",
             "race_date": "June 20, 2026",
-            "weeks_to_race": 15,
+            "weeks_to_race": weeks_to_race,
             "previous_best": {
                 "total": "2:44:39",
                 "swim": "0:28:39 (1.5km)",
@@ -199,7 +204,7 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 {intervals_summary['recent_activities']}
 
 ## Periodization Context
-- 15 weeks to race. Currently in base building phase.
+- {weeks_to_race} weeks ({days_to_race} days) to race. Currently in base building phase.
 - Priority order: Bike > Run > Swim (swim resumes April)
 - Week structure goal: 3 bikes, 3 runs, 1 rest day (adjust based on readiness)
 - CTL target progression: aim to reach CTL ~55-60 by race week taper

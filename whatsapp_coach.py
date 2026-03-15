@@ -149,6 +149,9 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     ctl_trend_yoy = ctl_data.get('yoy', {})
     current_ctl = ctl_data.get('current_ctl') or 0
     ctl_gap = round(55 - current_ctl, 1)
+    weeks_remaining = max(weeks_to_race - 2, 1)  # -2 for taper
+    ctl_per_week_needed = round(ctl_gap / weeks_remaining, 1)
+
 
     context_block = f"""
 [LIVE DATA - {today}]
@@ -159,10 +162,14 @@ HRV last night: {garmin_summary.get('hrv_last_night')} | Weekly avg: {garmin_sum
 CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
 CTL 4-week trend: {ctl_trend_4w} ({ctl_data.get('trend_4w_direction', 'N/A')})
 YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_trend_yoy.get('2026')} (current)
-CTL target: 55-60 by race week — need +{ctl_gap} points in 13 weeks (~+{round(ctl_gap / 13, 1)}/week)
+CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining} weeks (~+{ctl_per_week_needed}/week)
 Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
-Weeks to race: 15
+race_date = date(2026, 6, 20)
+weeks_to_race = (race_date - date.today()).days // 7
+days_to_race = (race_date - date.today()).days
+Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
+
 
 [ATHLETE MESSAGE]
 {user_message}
