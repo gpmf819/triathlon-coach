@@ -1,5 +1,6 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.rest import Client as TwilioClient
 import anthropic
 import os
 import json
@@ -81,7 +82,6 @@ def get_cached():
 
 
 def build_system_prompt(workout_library_text):
-    # Compute phase at prompt build time (cached hourly)
     weeks_to_race = (RACE_DATE - date.today()).days // 7
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
@@ -149,34 +149,25 @@ def get_coaching_context():
         return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
 
 
-def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
-    """Send message to Claude with full context and conversation history."""
-    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
-    if phone_number not in conversations:
-        conversations[phone_number] = []
-
-    history = conversations[phone_number]
-
+def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
+    """Build the live data context block used in both chat and nightly messages."""
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
-    # Dynamic race countdown
     weeks_to_race = (RACE_DATE - date.today()).days // 7
     days_to_race = (RACE_DATE - date.today()).days
     weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
-    # CTL trend strings from cache
     ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
     ctl_trend_yoy = ctl_data.get('yoy', {})
     current_ctl = ctl_data.get('current_ctl') or 0
     ctl_gap = round(55 - current_ctl, 1)
     ctl_per_week_needed = round(ctl_gap / weeks_remaining_for_ctl, 1)
 
-    context_block = f"""
+    block = f"""
 [LIVE DATA - {today}]
-Tomorrow is {tomorrow}. Workout recommendations are for tomorrow unless athlete specifies otherwise.
+Tomorrow is {tomorrow}.
 Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
 Current phase: {phase_name} — {phase_description}
 Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.get('sleep_score')}
@@ -188,11 +179,24 @@ YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2
 CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week_needed}/week)
 Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
-
-[ATHLETE MESSAGE]
-{user_message}
 """
+    if user_message:
+        block += f"\n[ATHLETE MESSAGE]\n{user_message}\n"
+    else:
+        block += "\n[TASK]\nGenerate tomorrow's workout recommendation as a proactive nightly WhatsApp message. Be concise — opening line with phase/countdown, workout with zones/power targets, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. End with: 'Reply to adjust or ask questions 💪'\n"
 
+    return block
+
+
+def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
+    """Send message to Claude with full context and conversation history."""
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    if phone_number not in conversations:
+        conversations[phone_number] = []
+
+    history = conversations[phone_number]
+    context_block = build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message)
     history.append({"role": "user", "content": context_block})
 
     response = client.messages.create(
@@ -205,11 +209,36 @@ Recent activities: {json.dumps(intervals_summary['recent_activities'], default=s
     reply = response.content[0].text
     history.append({"role": "assistant", "content": reply})
 
-    # Keep last 20 messages
     if len(history) > 20:
         conversations[phone_number] = history[-20:]
 
     return reply
+
+
+def send_whatsapp_message(to, body):
+    """Send outbound WhatsApp message via Twilio."""
+    twilio = TwilioClient(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+    message = twilio.messages.create(
+        from_=os.getenv("TWILIO_WHATSAPP_FROM"),
+        to=to,
+        body=body
+    )
+    print(f"Sent message SID: {message.sid}")
+    return message.sid
+
+
+def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
+    """Generate tomorrow's workout as a standalone proactive message."""
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    context_block = build_context_block(garmin_summary, intervals_summary, weekly, ctl_data)
+
+    response = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=400,
+        system=system_prompt,
+        messages=[{"role": "user", "content": context_block}]
+    )
+    return response.content[0].text
 
 
 @app.route("/whatsapp", methods=["POST"])
@@ -219,10 +248,7 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
-    # Fast fetches only
     garmin_summary, intervals_summary, weekly = get_coaching_context()
-
-    # Slow data from cache
     system_prompt, ctl_data = get_cached()
 
     reply = chat_with_coach(
@@ -236,6 +262,23 @@ def whatsapp_webhook():
     resp = MessagingResponse()
     resp.message(reply)
     return str(resp)
+
+
+@app.route("/nightly", methods=["GET", "POST"])
+def nightly_push():
+    """Called by Railway cron at 8pm ET to send tomorrow's workout."""
+    print("Nightly push triggered...")
+    try:
+        garmin_summary, intervals_summary, weekly = get_coaching_context()
+        system_prompt, ctl_data = get_cached()
+        message = generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data, system_prompt)
+        athlete_phone = os.getenv("ATHLETE_PHONE")
+        send_whatsapp_message(athlete_phone, message)
+        print(f"Nightly push sent to {athlete_phone}")
+        return "OK", 200
+    except Exception as e:
+        print(f"Nightly push error: {e}")
+        return f"Error: {e}", 500
 
 
 @app.route("/health", methods=["GET"])
