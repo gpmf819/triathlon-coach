@@ -1,6 +1,7 @@
 import anthropic
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
 load_dotenv()
 
@@ -36,6 +37,7 @@ def summarize_garmin(garmin_data):
         summary["hrv_status"] = hrv.get("hrvSummary", {}).get("status")
 
     return summary
+
 
 def summarize_intervals(intervals_data):
     """Extract the key fitness metrics from Intervals.icu data."""
@@ -93,15 +95,27 @@ def summarize_intervals(intervals_data):
         "recent_activities": recent
     }
 
+
 def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     """Call Claude to generate tomorrow's training recommendation."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     garmin_summary = summarize_garmin(garmin_data)
-    from intervals_client import get_athlete_profile, summarize_athlete_profile
+
+    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library
     raw_profile = get_athlete_profile()
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
+
+    today_str = datetime.now().strftime("%A, %B %d, %Y")
+    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%A, %B %d, %Y")
+
+    # Build workout library text
+    workout_library = get_workout_library()
+    workout_library_text = "\n".join([
+        f"- {w['zone']} | IF {w['median_if']} | NP {w['median_np']}W | TSS {w['median_tss']} | {w['median_duration_min']}min | {w['name']}"
+        for w in workout_library
+    ])
 
     if athlete_profile is None:
         athlete_profile = {
@@ -124,6 +138,8 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
         }
 
     prompt = f"""You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
+
+Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is for tomorrow.
 
 ## Athlete Profile
 - Name: {athlete_profile['name']}, Age: 44, Male, 75kg
@@ -167,26 +183,14 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 - CTL target progression: aim to reach CTL ~55-60 by race week taper
 - Key limiters to address: bike power (FTP improvement), run off-bike (brick fitness), swim efficiency
 
-## Zwift Workout Library Reference
-When recommending a Zwift bike session, suggest a specific named workout from Zwift's built-in library. Here are the main categories and example workouts by training type:
+## Zwift Workout Library (personal verified workouts — ONLY recommend from this list for bike sessions)
+{workout_library_text}
 
-EASY/RECOVERY (Zone 1-2):
-- "Endurance" category: "Active Recovery", "Coffee Ride", "Relaxed Ride"
-- "FTP Builders" category: "Endurance Ride I", "Endurance Ride II"
-
-TEMPO/SWEET SPOT (Zone 3-4):
-- "Sweet Spot" category: "Ramp Up I", "Ramp Up II", "Ramp Up III"
-- "FTP Builders": "Threshold Buster I", "Threshold Buster II"
-- "Triathlon" category: "Olympic Distance Base I", "Olympic Distance Base II"
-
-VO2MAX/HARD (Zone 5):
-- "FTP Builders": "FTP Booster I", "FTP Booster II"
-- "Climbing" category: "Peak Power I", "Peak Power II"
-- "Triathlon": "Olympic Distance Build I", "Olympic Distance Build II"
-
-BASE BUILDING:
-- "Triathlon" category: "70.3 Base I", "70.3 Base II", "Olympic Distance Base I"
-- "Gran Fondo": "Gran Fondo Prep I", "Gran Fondo Prep II"
+CRITICAL RULES for bike workout recommendations:
+1. You MUST select a workout from the library above — never invent or guess workout names
+2. Match the workout zone (Z2 Endurance / Tempo / Sweet Spot / Threshold) to the prescribed training intensity
+3. Consider the TSS and duration relative to the athlete's current fatigue (ATL) and form (TSB)
+4. State the exact workout name as it appears in the library
 
 ## Your Task
 Recommend tomorrow's training session. Be specific and practical.
@@ -200,9 +204,9 @@ Respond in this exact format:
 [Structured workout with warm-up, main set, cool-down. Include zones, power targets if bike, pace targets if run.]
 
 **ZWIFT WORKOUT** (only if sport is Bike):
-- Category: [exact Zwift category name]
-- Workout: [exact Zwift workout name]
-- Where to find it: Zwift menu → Workouts → [Category] → [Workout name]
+[Exact workout name from the library above]
+Zone: [zone classification]
+Expected NP: ~[NP]W | IF: [IF] | TSS: ~[TSS]
 
 **RATIONALE**: 2-3 sentences explaining why this session given today's readiness and training load.
 
