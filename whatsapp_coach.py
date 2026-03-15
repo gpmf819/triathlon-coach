@@ -26,11 +26,24 @@ _cache = {
 }
 CACHE_TTL_SECONDS = 3600  # 1 hour
 
+RACE_DATE = date(2026, 6, 20)
+
+
+def get_training_phase(weeks_to_race):
+    """Return current training phase name and description based on weeks to race."""
+    if weeks_to_race >= 11:
+        return "Base", "Aerobic volume and Z2 foundation. Bike > Run > Swim priority. Swim resumes April."
+    elif weeks_to_race >= 6:
+        return "Build", "Threshold and race-specific intensity. Brick sessions introduced. All three sports active."
+    elif weeks_to_race >= 3:
+        return "Peak", "Race-pace intervals, Olympic distance bricks, high intensity. Volume tapering begins."
+    else:
+        return "Taper", "Volume reduction, race sharpening, leg freshness priority. No new fitness gains."
+
 
 def refresh_cache():
     """Fetch slow data and rebuild system prompt. Called at startup and hourly."""
     now = time.time()
-
     print("Refreshing cache (workout library + CTL trajectory)...")
 
     try:
@@ -68,6 +81,10 @@ def get_cached():
 
 
 def build_system_prompt(workout_library_text):
+    # Compute phase at prompt build time (cached hourly)
+    weeks_to_race = (RACE_DATE - date.today()).days // 7
+    phase_name, phase_description = get_training_phase(weeks_to_race)
+
     return f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
 
 ## Athlete Profile
@@ -76,7 +93,7 @@ def build_system_prompt(workout_library_text):
   - Swim: 0:28:39 | Bike: 1:16:33 | Run: 0:51:00
 - Goal: Top 5 age group finish
 - Key limiters: bike power (FTP), run off-bike, swim efficiency
-- Current phase: Base building (winter). Bike > Run > Swim priority. Swim resumes April.
+- Current phase: {phase_name} — {phase_description}
 - Equipment: Zwift (indoor bike), outdoor/treadmill run, alpine skiing (cross-training)
 
 ## Athlete Physiology
@@ -144,32 +161,33 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
+    # Dynamic race countdown
+    weeks_to_race = (RACE_DATE - date.today()).days // 7
+    days_to_race = (RACE_DATE - date.today()).days
+    weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
+    phase_name, phase_description = get_training_phase(weeks_to_race)
+
     # CTL trend strings from cache
     ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
     ctl_trend_yoy = ctl_data.get('yoy', {})
     current_ctl = ctl_data.get('current_ctl') or 0
     ctl_gap = round(55 - current_ctl, 1)
-    weeks_remaining = max(weeks_to_race - 2, 1)  # -2 for taper
-    ctl_per_week_needed = round(ctl_gap / weeks_remaining, 1)
-
+    ctl_per_week_needed = round(ctl_gap / weeks_remaining_for_ctl, 1)
 
     context_block = f"""
 [LIVE DATA - {today}]
 Tomorrow is {tomorrow}. Workout recommendations are for tomorrow unless athlete specifies otherwise.
+Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
+Current phase: {phase_name} — {phase_description}
 Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.get('sleep_score')}
 Deep sleep: {garmin_summary.get('deep_sleep_hours')}hrs | REM: {garmin_summary.get('rem_sleep_hours')}hrs
 HRV last night: {garmin_summary.get('hrv_last_night')} | Weekly avg: {garmin_summary.get('hrv_weekly_avg')} | Status: {garmin_summary.get('hrv_status')}
 CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
 CTL 4-week trend: {ctl_trend_4w} ({ctl_data.get('trend_4w_direction', 'N/A')})
 YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_trend_yoy.get('2026')} (current)
-CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining} weeks (~+{ctl_per_week_needed}/week)
+CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week_needed}/week)
 Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
-race_date = date(2026, 6, 20)
-weeks_to_race = (race_date - date.today()).days // 7
-days_to_race = (race_date - date.today()).days
-Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
-
 
 [ATHLETE MESSAGE]
 {user_message}

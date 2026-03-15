@@ -1,9 +1,10 @@
 import anthropic
 import os
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 load_dotenv()
+
 
 def summarize_garmin(garmin_data):
     """Extract the key numbers from raw Garmin data."""
@@ -37,6 +38,18 @@ def summarize_garmin(garmin_data):
         summary["hrv_status"] = hrv.get("hrvSummary", {}).get("status")
 
     return summary
+
+
+def get_training_phase(weeks_to_race):
+    """Return current training phase name and description based on weeks to race."""
+    if weeks_to_race >= 11:
+        return "Base", "Aerobic volume and Z2 foundation. Bike > Run > Swim priority. Swim resumes April."
+    elif weeks_to_race >= 6:
+        return "Build", "Threshold and race-specific intensity. Brick sessions introduced. All three sports active."
+    elif weeks_to_race >= 3:
+        return "Peak", "Race-pace intervals, Olympic distance bricks, high intensity. Volume tapering begins."
+    else:
+        return "Taper", "Volume reduction, race sharpening, leg freshness priority. No new fitness gains."
 
 
 def summarize_intervals(intervals_data):
@@ -110,10 +123,14 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     today_str = datetime.now().strftime("%A, %B %d, %Y")
     tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
-    from datetime import date
+    # Dynamic race countdown
     race_date = date(2026, 6, 20)
     weeks_to_race = (race_date - date.today()).days // 7
     days_to_race = (race_date - date.today()).days
+    weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)  # subtract taper weeks
+
+    # Dynamic training phase
+    phase_name, phase_description = get_training_phase(weeks_to_race)
 
     # Build workout library text
     workout_library = get_workout_library()
@@ -126,6 +143,10 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     trend_4w_str = " → ".join([str(v) for _, v in ctl_data['trend_4w']])
     trend_12w_str = " → ".join([str(v) for _, v in ctl_data['trend_12w']])
     yoy = ctl_data['yoy']
+
+    ctl_gap = round(55 - ctl_data['current_ctl'], 1)
+    ctl_per_week = round(ctl_gap / weeks_remaining_for_ctl, 1)
+
     weekly = get_weekly_summary()
 
     if athlete_profile is None:
@@ -142,10 +163,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
                 "run": "0:51:00 (10km)",
                 "placement": "9th age group"
             },
-            "goal": "Top 5 age group finish. Key gains on bike and run. Swim maintained but not primary focus until April.",
-            "current_phase": "Base building (winter). Bike and run are priority sports. Swimming resumes April 2026.",
-            "available_equipment": ["Zwift (indoor bike)", "outdoor run", "treadmill", "alpine skiing (cross-training)"],
-            "notes": "Montreal-based. Currently in mixed winter block. No training constraints. CTL is low (24) — this is a base building phase, progressively building volume through spring before race-specific work in May/June."
+            "goal": "Top 5 age group finish. Key gains on bike and run.",
         }
 
     prompt = f"""You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
@@ -154,7 +172,7 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 
 ## Athlete Profile
 - Name: {athlete_profile['name']}, Age: 44, Male, 75kg
-- Target race: {athlete_profile['target_race']} on {athlete_profile['race_date']} ({athlete_profile['weeks_to_race']} weeks away)
+- Target race: {athlete_profile['target_race']} on {athlete_profile['race_date']} ({weeks_to_race} weeks / {days_to_race} days away)
 - Previous best: Total 2:44:39 | Swim 0:28:39 | Bike 1:16:33 | Run 0:51:00 (9th AG)
 - Goal: Top 5 age group finish
 
@@ -172,8 +190,8 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 - Sleep score: {garmin_summary.get('sleep_score')}
 - Deep sleep: {garmin_summary.get('deep_sleep_hours')} hours
 - REM sleep: {garmin_summary.get('rem_sleep_hours')} hours
-- Body battery start of day: {garmin_summary.get('body_battery_start')}
-- Body battery end of day: {garmin_summary.get('body_battery_end')}
+- Body battery start: {garmin_summary.get('body_battery_start')}
+- Body battery end: {garmin_summary.get('body_battery_end')}
 - HRV last night: {garmin_summary.get('hrv_last_night')}
 - HRV weekly avg: {garmin_summary.get('hrv_weekly_avg')}
 - HRV status: {garmin_summary.get('hrv_status')}
@@ -187,7 +205,11 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 ## CTL Trajectory
 - 4-week trend: {trend_4w_str} ({ctl_data['trend_4w_direction']})
 - 12-week trend: {trend_12w_str} ({ctl_data['trend_12w_direction']})
-- Target: CTL 55-60 by race week (June 13). Currently {ctl_data['current_ctl']} — need +{round(55 - ctl_data['current_ctl'], 1)} points in 13 weeks (~+{round((55 - ctl_data['current_ctl']) / 13, 1)}/week)
+- Target: CTL 55-60 by race week. Currently {ctl_data['current_ctl']} — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week}/week)
+
+## Year-over-Year CTL (same week)
+- 2024: {yoy['2024']} | 2025: {yoy['2025']} | 2026: {yoy['2026']} (current)
+- Context: 2026 is {round(yoy['2025'] - yoy['2026'], 1) if yoy['2025'] and yoy['2026'] else 'N/A'} points behind 2025 pace, {round(yoy['2026'] - yoy['2024'], 1) if yoy['2024'] and yoy['2026'] else 'N/A'} points ahead of 2024 pace
 
 ## This Week's Training Summary (since {weekly['week_start']})
 - Bike: {weekly['bike']['count']} sessions | {weekly['bike']['duration_min']}min | TSS {weekly['bike']['tss']}
@@ -196,19 +218,15 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 - Other: {weekly['other']['count']} sessions | {weekly['other']['duration_min']}min | TSS {weekly['other']['tss']}
 - Total week TSS: {weekly['total_tss']} | Days done: {weekly['days_done']}/7
 
-## Year-over-Year CTL (same week of March)
-- 2024: {yoy['2024']} | 2025: {yoy['2025']} | 2026: {yoy['2026']} (current)
-- Context: 2026 is {round(yoy['2025'] - yoy['2026'], 1) if yoy['2025'] and yoy['2026'] else 'N/A'} points behind 2025 pace, {round(yoy['2026'] - yoy['2024'], 1) if yoy['2024'] and yoy['2026'] else 'N/A'} points ahead of 2024 pace
-
 ## Recent Activities (last 7 days)
 {intervals_summary['recent_activities']}
 
 ## Periodization Context
-- {weeks_to_race} weeks ({days_to_race} days) to race. Currently in base building phase.
-- Priority order: Bike > Run > Swim (swim resumes April)
+- {weeks_to_race} weeks ({days_to_race} days) to race
+- Current phase: {phase_name} — {phase_description}
 - Week structure goal: 3 bikes, 3 runs, 1 rest day (adjust based on readiness)
 - CTL target progression: aim to reach CTL ~55-60 by race week taper
-- Key limiters to address: bike power (FTP improvement), run off-bike (brick fitness), swim efficiency
+- Key limiters: bike power (FTP improvement), run off-bike (brick fitness), swim efficiency
 
 ## Zwift Workout Library (personal verified workouts — ONLY recommend from this list for bike sessions)
 {workout_library_text}
