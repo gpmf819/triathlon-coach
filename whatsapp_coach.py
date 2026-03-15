@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -15,6 +15,7 @@ app = Flask(__name__)
 
 # In-memory conversation state per user
 conversations = {}
+
 
 def build_system_prompt():
     """Build system prompt with live workout library."""
@@ -85,13 +86,14 @@ def get_coaching_context():
         intervals_data = get_fitness_data()
         garmin_summary = summarize_garmin(garmin_data)
         intervals_summary = summarize_intervals(intervals_data)
-        return garmin_summary, intervals_summary
+        ctl_data = get_ctl_trajectory()
+        return garmin_summary, intervals_summary, ctl_data
     except Exception as e:
         print(f"Data fetch error: {e}")
-        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}
+        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
 
 
-def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary):
+def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, ctl_data):
     """Send message to Claude with full context and conversation history."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -103,6 +105,12 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
+    # Pre-compute CTL trend strings
+    ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
+    ctl_trend_yoy = ctl_data.get('yoy', {})
+    current_ctl = ctl_data.get('current_ctl') or 0
+    ctl_gap = round(55 - current_ctl, 1)
+
     context_block = f"""
 [LIVE DATA - {today}]
 Tomorrow is {tomorrow}. Workout recommendations are for tomorrow unless athlete specifies otherwise.
@@ -110,6 +118,9 @@ Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.ge
 Deep sleep: {garmin_summary.get('deep_sleep_hours')}hrs | REM: {garmin_summary.get('rem_sleep_hours')}hrs
 HRV last night: {garmin_summary.get('hrv_last_night')} | Weekly avg: {garmin_summary.get('hrv_weekly_avg')} | Status: {garmin_summary.get('hrv_status')}
 CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
+CTL 4-week trend: {ctl_trend_4w} ({ctl_data.get('trend_4w_direction', 'N/A')})
+YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_trend_yoy.get('2026')} (current)
+CTL target: 55-60 by race week — need +{ctl_gap} points in 13 weeks (~+{round(ctl_gap / 13, 1)}/week)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
 Weeks to race: 15
 
@@ -119,7 +130,6 @@ Weeks to race: 15
 
     history.append({"role": "user", "content": context_block})
 
-    # Rebuild system prompt each time to keep library fresh
     system_prompt = build_system_prompt()
 
     response = client.messages.create(
@@ -146,8 +156,8 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
-    garmin_summary, intervals_summary = get_coaching_context()
-    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary)
+    garmin_summary, intervals_summary, ctl_data = get_coaching_context()
+    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, ctl_data)
 
     print(f"Coach reply: {reply}")
 

@@ -206,6 +206,102 @@ def get_weekly_summary():
     summary["week_start"] = week_start
     return summary
 
+def get_ctl_trajectory():
+    """Get CTL trajectory (4-week and 12-week) plus year-over-year comparison."""
+    cfg = get_headers()
+    today = date.today()
+
+    # Fetch 12 weeks back to cover both trajectory windows
+    start_12w = (today - timedelta(weeks=12)).isoformat()
+    end_today = today.isoformat()
+
+    # Also fetch same ±1 week window for 2025 and 2024
+    week_start = (today - timedelta(days=7))
+    week_end = (today + timedelta(days=7))
+
+    def fetch_wellness(oldest, newest):
+        r = requests.get(
+            f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/wellness",
+            headers=cfg["headers"],
+            params={"oldest": oldest, "newest": newest}
+        )
+        r.raise_for_status()
+        return r.json()
+
+    # Current year - 12 weeks of data
+    current = fetch_wellness(start_12w, end_today)
+
+    # 2025 same week
+    y2025 = fetch_wellness(
+        (week_start.replace(year=2025)).isoformat(),
+        (week_end.replace(year=2025)).isoformat()
+    )
+
+    # 2024 same week
+    y2024 = fetch_wellness(
+        (week_start.replace(year=2024)).isoformat(),
+        (week_end.replace(year=2024)).isoformat()
+    )
+
+    def extract_ctl(wellness_list):
+        """Get CTL values with dates, filtering out nulls."""
+        return [
+            {"date": w["id"], "ctl": round(w["ctl"], 1)}
+            for w in wellness_list
+            if w.get("ctl") is not None
+        ]
+
+    def avg_ctl(wellness_list):
+        """Get average CTL for a window."""
+        values = [w["ctl"] for w in wellness_list if w.get("ctl") is not None]
+        return round(sum(values) / len(values), 1) if values else None
+
+    def weekly_ctl(wellness_list):
+        """Summarize CTL by week - last value of each week."""
+        from collections import OrderedDict
+        by_week = OrderedDict()
+        for w in wellness_list:
+            if w.get("ctl") is None:
+                continue
+            d = datetime.fromisoformat(w["id"])
+            week_key = f"{d.isocalendar()[0]}-W{d.isocalendar()[1]:02d}"
+            by_week[week_key] = round(w["ctl"], 1)
+        return by_week
+
+    all_ctl = extract_ctl(current)
+    weekly = weekly_ctl(current)
+    weeks = list(weekly.items())
+
+    # 4-week trend (last 4 weekly values)
+    trend_4w = weeks[-4:] if len(weeks) >= 4 else weeks
+
+    # 12-week trend (all weekly values)
+    trend_12w = weeks
+
+    # Direction assessment
+    def trend_direction(trend):
+        if len(trend) < 2:
+            return "insufficient data"
+        delta = trend[-1][1] - trend[0][1]
+        if delta > 5:
+            return f"↑ building (+{round(delta, 1)})"
+        elif delta < -5:
+            return f"↓ declining ({round(delta, 1)})"
+        else:
+            return f"→ stable ({round(delta, 1):+})"
+
+    return {
+        "current_ctl": all_ctl[-1]["ctl"] if all_ctl else None,
+        "trend_4w": trend_4w,
+        "trend_4w_direction": trend_direction(trend_4w),
+        "trend_12w": trend_12w,
+        "trend_12w_direction": trend_direction(trend_12w),
+        "yoy": {
+            "2024": avg_ctl(y2024),
+            "2025": avg_ctl(y2025),
+            "2026": all_ctl[-1]["ctl"] if all_ctl else None
+        }
+    }
 
 def get_workout_library():
     """Build a personal workout library from historical CoachChris indoor rides."""

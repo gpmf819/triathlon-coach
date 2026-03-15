@@ -102,7 +102,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 
     garmin_summary = summarize_garmin(garmin_data)
 
-    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library
+    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library, get_ctl_trajectory
     raw_profile = get_athlete_profile()
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
@@ -116,6 +116,11 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
         f"- {w['zone']} | IF {w['median_if']} | NP {w['median_np']}W | TSS {w['median_tss']} | {w['median_duration_min']}min | {w['name']}"
         for w in workout_library
     ])
+
+    ctl_data = get_ctl_trajectory()
+    trend_4w_str = " → ".join([str(v) for _, v in ctl_data['trend_4w']])
+    trend_12w_str = " → ".join([str(v) for _, v in ctl_data['trend_12w']])
+    yoy = ctl_data['yoy']
 
     if athlete_profile is None:
         athlete_profile = {
@@ -172,6 +177,15 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 - Fatigue (ATL): {intervals_summary['atl']} — acute training load
 - Form (TSB): {intervals_summary['tsb']} — fitness minus fatigue
 - TSB guide: above +10 = very fresh, 0 to -10 = optimal training zone, -10 to -30 = heavy load, below -30 = overreaching
+
+## CTL Trajectory
+- 4-week trend: {trend_4w_str} ({ctl_data['trend_4w_direction']})
+- 12-week trend: {trend_12w_str} ({ctl_data['trend_12w_direction']})
+- Target: CTL 55-60 by race week (June 13). Currently {ctl_data['current_ctl']} — need +{round(55 - ctl_data['current_ctl'], 1)} points in 13 weeks (~+{round((55 - ctl_data['current_ctl']) / 13, 1)}/week)
+
+## Year-over-Year CTL (same week of March)
+- 2024: {yoy['2024']} | 2025: {yoy['2025']} | 2026: {yoy['2026']} (current)
+- Context: 2026 is {round(yoy['2025'] - yoy['2026'], 1) if yoy['2025'] and yoy['2026'] else 'N/A'} points behind 2025 pace, {round(yoy['2026'] - yoy['2024'], 1) if yoy['2024'] and yoy['2026'] else 'N/A'} points ahead of 2024 pace
 
 ## Recent Activities (last 7 days)
 {intervals_summary['recent_activities']}
