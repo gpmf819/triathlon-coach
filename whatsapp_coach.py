@@ -3,7 +3,8 @@ from twilio.twiml.messaging_response import MessagingResponse
 import anthropic
 import os
 import json
-from datetime import date, datetime, timedelta
+import time
+from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
 from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary
@@ -16,9 +17,23 @@ app = Flask(__name__)
 # In-memory conversation state per user
 conversations = {}
 
+# Cache for slow data (workout library, CTL trajectory, athlete profile)
+_cache = {
+    "workout_library": None,
+    "workout_library_text": None,
+    "system_prompt": None,
+    "last_refreshed": 0,
+}
+CACHE_TTL_SECONDS = 3600  # refresh every hour
 
-def build_system_prompt():
-    """Build system prompt with live workout library."""
+
+def get_cached_system_prompt():
+    """Return cached system prompt, rebuilding if stale."""
+    now = time.time()
+    if _cache["system_prompt"] and (now - _cache["last_refreshed"]) < CACHE_TTL_SECONDS:
+        return _cache["system_prompt"]
+
+    print("Refreshing slow cache (workout library)...")
     try:
         workout_library = get_workout_library()
         workout_library_text = "\n".join([
@@ -27,9 +42,9 @@ def build_system_prompt():
         ])
     except Exception as e:
         print(f"Warning: Could not load workout library: {e}")
-        workout_library_text = "(library unavailable)"
+        workout_library_text = _cache.get("workout_library_text") or "(library unavailable)"
 
-    return f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
+    prompt = f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
 
 ## Athlete Profile
 - Age: 44, Male, 75kg, Montreal-based
@@ -78,23 +93,29 @@ If only a Z2 ride is needed, say "free ride Zone 2" — do NOT invent a structur
 - Workout completed → acknowledge, note it, adjust outlook
 """
 
+    _cache["workout_library_text"] = workout_library_text
+    _cache["system_prompt"] = prompt
+    _cache["last_refreshed"] = now
+    print("Cache refreshed.")
+    return prompt
+
 
 def get_coaching_context():
-    """Fetch all data and return a context summary for Claude."""
+    """Fetch only fast/fresh data per message."""
     try:
         garmin_data = get_readiness_data()
         intervals_data = get_fitness_data()
         garmin_summary = summarize_garmin(garmin_data)
         intervals_summary = summarize_intervals(intervals_data)
-        ctl_data = get_ctl_trajectory()
         weekly = get_weekly_summary()
-        return garmin_summary, intervals_summary, ctl_data, weekly
+        ctl_data = get_ctl_trajectory()
+        return garmin_summary, intervals_summary, weekly, ctl_data
     except Exception as e:
         print(f"Data fetch error: {e}")
         return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}, {}
 
 
-def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, ctl_data, weekly):
+def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data):
     """Send message to Claude with full context and conversation history."""
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -106,7 +127,7 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
-    # Pre-compute CTL trend strings
+    # CTL trend strings
     ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
     ctl_trend_yoy = ctl_data.get('yoy', {})
     current_ctl = ctl_data.get('current_ctl') or 0
@@ -132,7 +153,7 @@ Weeks to race: 15
 
     history.append({"role": "user", "content": context_block})
 
-    system_prompt = build_system_prompt()
+    system_prompt = get_cached_system_prompt()
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
@@ -158,8 +179,8 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
-    garmin_summary, intervals_summary, ctl_data, weekly = get_coaching_context()
-    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, ctl_data, weekly)
+    garmin_summary, intervals_summary, weekly, ctl_data = get_coaching_context()
+    reply = chat_with_coach(incoming_msg, from_number, garmin_summary, intervals_summary, weekly, ctl_data)
 
     print(f"Coach reply: {reply}")
 
@@ -171,6 +192,15 @@ def whatsapp_webhook():
 @app.route("/health", methods=["GET"])
 def health():
     return "Coach is alive!", 200
+
+
+# Pre-warm cache at startup
+print("Pre-warming cache at startup...")
+try:
+    get_cached_system_prompt()
+    print("Cache warmed successfully.")
+except Exception as e:
+    print(f"Cache warm failed (will retry on first request): {e}")
 
 
 if __name__ == "__main__":
