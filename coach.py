@@ -127,7 +127,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     race_date = date(2026, 6, 20)
     weeks_to_race = (race_date - date.today()).days // 7
     days_to_race = (race_date - date.today()).days
-    weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)  # subtract taper weeks
+    weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
 
     # Dynamic training phase
     phase_name, phase_description = get_training_phase(weeks_to_race)
@@ -182,8 +182,20 @@ Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is
 - Bike LTHR: {athlete_metrics['bike']['lthr']} bpm
 - Bike power zones: {dict(zip(athlete_metrics['bike']['power_zone_names'], athlete_metrics['bike']['power_zones']))}
 - Run LTHR: {athlete_metrics['run']['lthr']} bpm
-- Run HR zones: {athlete_metrics['run']['hr_zones']}
+- Run HR zones (confirmatory only): {athlete_metrics['run']['hr_zones']}
 - Swim threshold pace: {athlete_metrics['swim']['threshold_pace_per_100m']}
+
+## Run Prescription Philosophy
+Runs are prescribed using pace as the PRIMARY metric, RPE as SECONDARY, and HR as CONFIRMATORY only.
+- HR is a lagging indicator — it takes 60-90 seconds to respond to pace changes
+- Never prescribe HR as a target to chase in real time — athletes should control effort via pace and feel
+- HR zones are provided as a confirmation check only: if HR is consistently above the expected range after 2 minutes of settling, the pace is too fast
+
+## Athlete Run Paces (derived from recent activity data)
+- Easy / Z2 pace: 5:50-6:10/km | RPE 3/10 | fully conversational | HR settles 145-153 after warmup
+- Tempo / Z3 pace: 5:05-5:20/km | RPE 6-7/10 | short phrases only | HR settles 154-162 after 90s
+- Threshold / Z4 pace: 4:45-5:00/km | RPE 8/10 | cannot speak | HR settles 163-171 after 90s
+- Note: HR will lag pace by 60-90 seconds at start of each interval — this is normal, do not slow down
 
 ## Today's Readiness (from Garmin)
 - Sleep duration: {garmin_summary.get('sleep_duration_hours')} hours
@@ -237,6 +249,14 @@ CRITICAL RULES for bike workout recommendations:
 3. Consider the TSS and duration relative to the athlete's current fatigue (ATL) and form (TSB)
 4. State the exact workout name as it appears in the library
 
+## Run Workout Format Rules
+For ALL run workouts:
+- Lead with pace target in min/km (e.g. 5:50-6:10/km)
+- Follow with RPE descriptor (e.g. RPE 3/10 — fully conversational)
+- Add HR as confirmation only (e.g. HR expected 145-153 after 2min warmup)
+- For interval runs: note explicitly that HR lags pace by 60-90s at interval start — target pace, not HR
+- Structure: always include warm-up, main set broken into named steps, cool-down
+
 ## Your Task
 Recommend tomorrow's training session. Be specific and practical.
 
@@ -246,7 +266,7 @@ Respond in this exact format:
 **SPORT**: [Bike / Run / Swim / Rest / Cross-train]
 **DURATION**: [e.g. 60 min]
 **WORKOUT**:
-[Structured workout with warm-up, main set, cool-down. Include zones, power targets if bike, pace targets if run.]
+[Structured workout. For runs: pace primary, RPE secondary, HR confirmatory. For bikes: power zones primary, HR secondary.]
 
 **ZWIFT WORKOUT** (only if sport is Bike):
 [Exact workout name from the library above]

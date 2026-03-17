@@ -104,6 +104,14 @@ def build_system_prompt(workout_library_text):
 - Run HR zones: Z1 <145 | Z2 145-153 | Z3 154-162 | Z4 163-171 | Z5 172-176 | Z6 177-181 | Z7 182-190
 - Swim threshold pace: 2:00/100m
 
+## Run Prescription Philosophy
+- Pace is PRIMARY, RPE is SECONDARY, HR is CONFIRMATORY only
+- HR lags pace by 60-90 seconds — never tell athlete to chase HR in real time
+- Easy runs: 5:50-6:10/km | RPE 3/10 | HR confirms 145-153 after warmup
+- Tempo runs: 5:05-5:20/km | RPE 6-7/10 | HR confirms 154-162 after 90s
+- Threshold: 4:45-5:00/km | RPE 8/10 | HR confirms 163-171 after 90s
+- Always note HR lag explicitly for interval work
+
 ## Zwift Workout Library (ONLY recommend from this list for bike sessions)
 {workout_library_text}
 
@@ -292,12 +300,6 @@ def nightly_push():
 @app.route("/health", methods=["GET"])
 def health():
     return "Coach is alive!", 200
-
-@app.route("/debug-env", methods=["GET"])
-def debug_env():
-    key = os.getenv("INTERVALS_API_KEY", "NOT SET")
-    athlete = os.getenv("INTERVALS_ATHLETE_ID", "NOT SET")
-    return f"Key: {key[:4]}...{key[-4:]} | Athlete: {athlete}", 200
 
 # Pre-warm cache at startup so first message is fast
 print("Pre-warming cache at startup...")
