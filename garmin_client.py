@@ -41,18 +41,18 @@ def get_readiness_data(days_back=1):
             params={"date": date_str}
         )
         results["sleep"] = sleep
-        print("✓ Sleep data fetched")
+        print("OK Sleep data fetched")
     except Exception as e:
-        print(f"✗ Sleep failed: {e}")
+        print(f"FAIL Sleep failed: {e}")
         results["sleep"] = None
 
     # HRV
     try:
         hrv = client.connectapi(f"/hrv-service/hrv/{date_str}")
         results["hrv"] = hrv
-        print("✓ HRV fetched")
+        print("OK HRV fetched")
     except Exception as e:
-        print(f"✗ HRV failed: {e}")
+        print(f"FAIL HRV failed: {e}")
         results["hrv"] = None
 
     return results

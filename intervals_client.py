@@ -379,3 +379,36 @@ def get_workout_library():
 
     library.sort(key=lambda x: x["median_if"])
     return library
+
+def create_run_workout(name, workout_text, target_date=None):
+    """Create a structured run workout in Intervals.icu using plain text format."""
+    cfg = get_headers()
+
+    if target_date is None:
+        target_date = (date.today() + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")
+    else:
+        target_date = target_date.strftime("%Y-%m-%dT00:00:00")
+
+    workout = {
+        "name": name,
+        "type": "Run",
+        "category": "WORKOUT",
+        "start_date_local": target_date,
+        "description": workout_text
+    }
+
+    r = requests.post(
+        f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/events",
+        headers={**cfg["headers"], "Content-Type": "application/json"},
+        json=workout
+    )
+    r.raise_for_status()
+    result = r.json()
+
+    steps = sum(1 for line in workout_text.split('\n') if line.strip().startswith('- '))
+
+    return {
+        "name": result.get("name", name),
+        "event_id": result.get("id"),
+        "steps": steps
+    }

@@ -58,7 +58,7 @@ def refresh_cache():
             for w in workout_library
         ])
         _cache["workout_library_text"] = workout_library_text
-        print("✓ Workout library loaded")
+        print("OK Workout library loaded")
     except Exception as e:
         print(f"Workout library error: {e}")
         workout_library_text = _cache["workout_library_text"] or "(library unavailable)"
@@ -66,7 +66,7 @@ def refresh_cache():
     try:
         ctl_data = get_ctl_trajectory()
         _cache["ctl_data"] = ctl_data
-        print("✓ CTL trajectory loaded")
+        print("OK CTL trajectory loaded")
     except Exception as e:
         print(f"CTL trajectory error: {e}")
         ctl_data = _cache["ctl_data"] or {}
@@ -124,12 +124,14 @@ Never invent or guess workout names. Match zone to prescribed intensity.
 If only a Z2 ride is needed, say "free ride Zone 2" — do NOT invent a structured workout name.
 
 ## Run Workout Upload Format
-When recommending a run workout, ALWAYS include this block at the end:
+ONLY when recommending a RUN workout (not bike, not swim), ALWAYS include this block at the very end:
 [WORKOUT_UPLOAD]
 name: <concise workout name>
 ---
 <workout in Intervals.icu plain text format>
 [/WORKOUT_UPLOAD]
+
+Do NOT include this block for bike or swim sessions.
 
 Intervals.icu plain text format example:
 Warmup
