@@ -5,10 +5,11 @@ import anthropic
 import os
 import json
 import time
+import re
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -17,6 +18,9 @@ app = Flask(__name__)
 
 # In-memory conversation state per user
 conversations = {}
+
+# Pending workout uploads per user (stored after coach recommends a run)
+pending_uploads = {}
 
 # Cache for slow data (refreshed hourly at most)
 _cache = {
@@ -101,7 +105,7 @@ def build_system_prompt(workout_library_text):
 - Bike LTHR: 172 bpm | Max HR: 190 bpm
 - Bike power zones: Z1 <160W | Z2 160-218W | Z3 218-262W | Z4 262-305W | Z5 305-349W | Z6 349-436W | Z7 436W+
 - Run LTHR: 172 bpm
-- Run HR zones: Z1 <145 | Z2 145-153 | Z3 154-162 | Z4 163-171 | Z5 172-176 | Z6 177-181 | Z7 182-190
+- Run HR zones (confirmatory only): Z1 <145 | Z2 145-153 | Z3 154-162 | Z4 163-171
 - Swim threshold pace: 2:00/100m
 
 ## Run Prescription Philosophy
@@ -119,20 +123,43 @@ CRITICAL: For bike sessions you MUST recommend a workout from the library above 
 Never invent or guess workout names. Match zone to prescribed intensity.
 If only a Z2 ride is needed, say "free ride Zone 2" — do NOT invent a structured workout name.
 
+## Run Workout Upload Format
+When recommending a run workout, ALWAYS include this block at the end:
+[WORKOUT_UPLOAD]
+name: <concise workout name>
+---
+<workout in Intervals.icu plain text format>
+[/WORKOUT_UPLOAD]
+
+Intervals.icu plain text format example:
+Warmup
+- 10m 6:10/km, RPE 3/10 conversational
+
+Main set
+- 30m 5:50-6:00/km, RPE 3/10 fully conversational. HR confirms 145-153 after 2min
+
+Cooldown
+- 10m 6:30/km, RPE 2/10 very easy
+
+For intervals use:
+Main set 3x
+- 8m 5:05-5:20/km, RPE 6-7/10. HR confirms 154-162 after 90s
+- 3m 6:10/km, RPE 3/10 recovery
+
 ## Your Coaching Style
 - Conversational but precise — like a coach texting an athlete
 - Keep responses concise for WhatsApp (no walls of text)
-- Use emojis sparingly but effectively
+- No emojis
 - Always ask about energy level (1-5) and available time before prescribing a workout if you don't have that info
 - When asked for training block overview: current phase, weeks to race, CTL progress, 3-day outlook
 - Adapt recommendations based on how the athlete says they feel
 
 ## Response Format for Workout Requests
 1. One-line block/phase context
-2. Today's workout with structure (zones, power targets, HR targets)
-3. Zwift workout name if bike (from library only, or "free ride Zone 2")
+2. Today's workout with structure (zones, power targets for bike / pace + RPE for run)
+3. Zwift workout name if bike (from library only) OR [WORKOUT_UPLOAD] block if run
 4. Brief rationale (1-2 sentences)
-5. Ask: "How does that sound? 💪"
+5. For runs: end with "Reply 'confirm' to upload to Intervals.icu and sync to your Garmin"
 
 ## Conversation Flow
 - Hi/hello → ask how they're feeling and what they have time for
@@ -157,8 +184,39 @@ def get_coaching_context():
         return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
 
 
+def extract_workout_upload(text):
+    """Extract workout name and text from [WORKOUT_UPLOAD]...[/WORKOUT_UPLOAD] block."""
+    match = re.search(r'\[WORKOUT_UPLOAD\](.*?)\[/WORKOUT_UPLOAD\]', text, re.DOTALL)
+    if not match:
+        return None, None
+
+    content = match.group(1).strip()
+    lines = content.split('\n')
+
+    name = None
+    workout_lines = []
+    past_separator = False
+
+    for line in lines:
+        line = line.strip()
+        if line.startswith('name:'):
+            name = line.replace('name:', '').strip()
+        elif line == '---':
+            past_separator = True
+        elif past_separator:
+            workout_lines.append(line)
+
+    workout_text = '\n'.join(workout_lines).strip()
+    return name, workout_text
+
+
+def strip_workout_upload_block(text):
+    """Remove the [WORKOUT_UPLOAD] block from coach response before sending to athlete."""
+    return re.sub(r'\[WORKOUT_UPLOAD\].*?\[/WORKOUT_UPLOAD\]', '', text, flags=re.DOTALL).strip()
+
+
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
-    """Build the live data context block used in both chat and nightly messages."""
+    """Build the live data context block."""
     today = date.today().strftime("%A, %B %d, %Y")
     tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
@@ -191,7 +249,7 @@ Recent activities: {json.dumps(intervals_summary['recent_activities'], default=s
     if user_message:
         block += f"\n[ATHLETE MESSAGE]\n{user_message}\n"
     else:
-        block += "\n[TASK]\nGenerate tomorrow's workout recommendation as a proactive nightly WhatsApp message. Be concise — opening line with phase/countdown, workout with zones/power targets, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. End with: 'Reply to adjust or ask questions 💪'\n"
+        block += "\n[TASK]\nGenerate tomorrow's workout recommendation as a proactive nightly WhatsApp message. Be concise — opening line with phase/countdown, workout with pace+RPE for runs or power zones for bike, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. For runs include [WORKOUT_UPLOAD] block. End with: 'Reply confirm to upload to Garmin or reply to adjust'\n"
 
     return block
 
@@ -209,18 +267,46 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=600,
+        max_tokens=800,
         system=system_prompt,
         messages=history
     )
 
-    reply = response.content[0].text
-    history.append({"role": "assistant", "content": reply})
+    full_reply = response.content[0].text
+
+    # Extract and store workout upload block if present
+    workout_name, workout_text = extract_workout_upload(full_reply)
+    if workout_name and workout_text:
+        pending_uploads[phone_number] = {
+            "name": workout_name,
+            "text": workout_text
+        }
+        print(f"Stored pending upload for {phone_number}: {workout_name}")
+
+    # Strip upload block before sending to athlete
+    reply = strip_workout_upload_block(full_reply)
+
+    history.append({"role": "assistant", "content": full_reply})  # keep full reply in history
 
     if len(history) > 20:
         conversations[phone_number] = history[-20:]
 
     return reply
+
+
+def handle_confirm(phone_number):
+    """Upload pending workout to Intervals.icu when athlete confirms."""
+    pending = pending_uploads.get(phone_number)
+    if not pending:
+        return "No pending workout to upload. Ask for a run recommendation first."
+
+    try:
+        result = create_run_workout(pending["name"], pending["text"])
+        del pending_uploads[phone_number]
+        return f"Done — '{result['name']}' uploaded to Intervals.icu ({result['steps']} steps). It will sync to your Garmin within a few minutes."
+    except Exception as e:
+        print(f"Upload error: {e}")
+        return f"Upload failed: {str(e)}. Try again or check Intervals.icu manually."
 
 
 def send_whatsapp_message(to, body):
@@ -242,11 +328,24 @@ def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data
 
     response = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=400,
+        max_tokens=500,
         system=system_prompt,
         messages=[{"role": "user", "content": context_block}]
     )
-    return response.content[0].text
+
+    full_reply = response.content[0].text
+    athlete_phone = os.getenv("ATHLETE_PHONE")
+
+    # Store pending upload from nightly message
+    workout_name, workout_text = extract_workout_upload(full_reply)
+    if workout_name and workout_text:
+        pending_uploads[athlete_phone] = {
+            "name": workout_name,
+            "text": workout_text
+        }
+        print(f"Nightly: stored pending upload: {workout_name}")
+
+    return strip_workout_upload_block(full_reply)
 
 
 @app.route("/whatsapp", methods=["POST"])
@@ -256,6 +355,15 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
+    # Handle confirm/upload trigger
+    if incoming_msg.lower() in ["confirm", "upload", "yes upload", "upload it"]:
+        reply = handle_confirm(from_number)
+        print(f"Upload reply: {reply}")
+        resp = MessagingResponse()
+        resp.message(reply)
+        return str(resp)
+
+    # Normal coaching flow
     garmin_summary, intervals_summary, weekly = get_coaching_context()
     system_prompt, ctl_data = get_cached()
 
@@ -272,13 +380,11 @@ def whatsapp_webhook():
     return str(resp)
 
 
-import threading
-
 @app.route("/nightly", methods=["GET", "POST"])
 def nightly_push():
-    """Called by Railway cron at 8pm ET to send tomorrow's workout."""
+    """Called by cron at 8pm ET to send tomorrow's workout."""
     print("Nightly push triggered...")
-    
+
     def send_in_background():
         try:
             garmin_summary, intervals_summary, weekly = get_coaching_context()
@@ -289,11 +395,12 @@ def nightly_push():
             print(f"Nightly push sent to {athlete_phone}")
         except Exception as e:
             print(f"Nightly push background error: {e}")
-    
+
+    import threading
     thread = threading.Thread(target=send_in_background)
     thread.daemon = True
     thread.start()
-    
+
     return "Nightly push started", 200
 
 
@@ -301,7 +408,8 @@ def nightly_push():
 def health():
     return "Coach is alive!", 200
 
-# Pre-warm cache at startup so first message is fast
+
+# Pre-warm cache at startup
 print("Pre-warming cache at startup...")
 try:
     refresh_cache()
@@ -310,7 +418,7 @@ except Exception as e:
 
 
 if __name__ == "__main__":
-    print("🏊 Triathlon Coach WhatsApp Server starting...")
+    print("Triathlon Coach WhatsApp Server starting...")
     port = int(os.environ.get("PORT", 8080))
     print(f"Starting on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)

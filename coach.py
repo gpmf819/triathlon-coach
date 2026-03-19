@@ -250,12 +250,21 @@ CRITICAL RULES for bike workout recommendations:
 4. State the exact workout name as it appears in the library
 
 ## Run Workout Format Rules
-For ALL run workouts:
-- Lead with pace target in min/km (e.g. 5:50-6:10/km)
-- Follow with RPE descriptor (e.g. RPE 3/10 — fully conversational)
-- Add HR as confirmation only (e.g. HR expected 145-153 after 2min warmup)
-- For interval runs: note explicitly that HR lags pace by 60-90s at interval start — target pace, not HR
-- Structure: always include warm-up, main set broken into named steps, cool-down
+- Step names must be descriptive and concise — they display on the Garmin watch
+- Include RPE in step name: "Warmup easy RPE3", "Tempo RPE6-7", "Recovery RPE3"
+- Include HR confirmation in interval step names: "Tempo RPE6-7 HR154-162"
+- Pace targets go in the step duration line: "- 10m 5:05-5:20/km"
+- Always include warmup and cooldown steps
+- For interval runs, alternate work and recovery steps explicitly
+
+When recommending a run workout, always include a structured upload block at the end:
+[WORKOUT_UPLOAD]
+name: <workout name>
+---
+<plain text workout in Intervals.icu format>
+[/WORKOUT_UPLOAD]
+
+This block will be used to auto-upload to Intervals.icu when athlete confirms.
 
 ## Your Task
 Recommend tomorrow's training session. Be specific and practical.
