@@ -37,7 +37,7 @@ def get_headers():
 
 def get_fitness_data():
     cfg = get_headers()
-    today = date.today().isoformat()
+    today = (date.today() + timedelta(days=1)).isoformat()  # exclusive upper bound
     week_ago = (date.today() - timedelta(days=7)).isoformat()
 
     # Wellness (CTL/ATL/TSB)
@@ -148,7 +148,7 @@ def get_weekly_summary():
 
     days_since_monday = today.weekday()
     week_start = (today - timedelta(days=days_since_monday)).isoformat()
-    week_end = today.isoformat()
+    week_end = (today + timedelta(days=1)).isoformat()  # exclusive upper bound
 
     activities_url = f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities"
     activities = requests.get(

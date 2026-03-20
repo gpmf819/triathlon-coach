@@ -174,16 +174,28 @@ Main set 3x
 
 def get_coaching_context():
     """Fetch only fast/fresh data per message: Garmin, activities, weekly summary."""
+    garmin_summary = {}
+    intervals_summary = {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}
+    weekly = {}
+
     try:
         garmin_data = get_readiness_data()
-        intervals_data = get_fitness_data()
         garmin_summary = summarize_garmin(garmin_data)
-        intervals_summary = summarize_intervals(intervals_data)
-        weekly = get_weekly_summary()
-        return garmin_summary, intervals_summary, weekly
     except Exception as e:
-        print(f"Data fetch error: {e}")
-        return {}, {"ctl": "unknown", "atl": "unknown", "tsb": "unknown", "recent_activities": []}, {}
+        print(f"Garmin fetch error: {e}")
+
+    try:
+        intervals_data = get_fitness_data()
+        intervals_summary = summarize_intervals(intervals_data)
+    except Exception as e:
+        print(f"Intervals activities fetch error: {e}")
+
+    try:
+        weekly = get_weekly_summary()
+    except Exception as e:
+        print(f"Intervals weekly summary fetch error: {e}")
+
+    return garmin_summary, intervals_summary, weekly
 
 
 def extract_workout_upload(text):
