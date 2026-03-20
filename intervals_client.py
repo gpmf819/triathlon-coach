@@ -333,6 +333,7 @@ def get_ctl_trajectory():
         "current_weekly_gain": current_4w_gain,
         "weeks_remaining_for_ctl": weeks_remaining_for_ctl,
         "weekly_tss_needed": round(ctl_per_week * 49),
+        "current_weekly_tss": round(current_4w_gain * 49),
         "projected_race_ctl": round(current_ctl + (weeks_remaining_for_ctl * current_4w_gain)),
         "projected_ctl_4w_current": round(current_ctl + (4 * current_4w_gain)),
         "projected_ctl_4w_required": round(current_ctl + (4 * ctl_per_week)),
@@ -358,7 +359,7 @@ def format_ctl_report(ctl_data, total_tss_this_week=0):
         projection_note = "On track"
     else:
         shortfall = target - projected
-        tss_gap = max(ctl_data['weekly_tss_needed'] - (total_tss_this_week or 0), 0)
+        tss_gap = max(ctl_data['weekly_tss_needed'] - ctl_data.get('current_weekly_tss', 0), 0)
         projection_note = f"Shortfall: {shortfall} pts — increase weekly TSS by ~{tss_gap}"
 
     yoy_vs_2025 = f"{round(yoy_2025 - current, 1)} pts behind" if yoy_2025 else "N/A"
