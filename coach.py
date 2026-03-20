@@ -40,16 +40,15 @@ def summarize_garmin(garmin_data):
     return summary
 
 
-def get_training_phase(weeks_to_race):
-    """Return current training phase name and description based on weeks to race."""
-    if weeks_to_race >= 11:
-        return "Base", "Aerobic volume and Z2 foundation. Bike > Run > Swim priority. Swim resumes April."
-    elif weeks_to_race >= 6:
-        return "Build", "Threshold and race-specific intensity. Brick sessions introduced. All three sports active."
-    elif weeks_to_race >= 3:
-        return "Peak", "Race-pace intervals, Olympic distance bricks, high intensity. Volume tapering begins."
-    else:
-        return "Taper", "Volume reduction, race sharpening, leg freshness priority. No new fitness gains."
+def get_training_phase(weeks_to_race=None):
+    """Return current training phase name and description based on periodization timeline."""
+    from intervals_client import get_current_phase_targets, PHASE_DESCRIPTIONS
+    phase = get_current_phase_targets()
+    phase_name = phase["phase"]
+    tss_lo, tss_hi = phase["tss_target"]
+    base_desc = PHASE_DESCRIPTIONS.get(phase_name, "")
+    description = f"{base_desc} Target {tss_lo}-{tss_hi} TSS/wk."
+    return phase_name, description
 
 
 def summarize_intervals(intervals_data):
@@ -115,7 +114,7 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 
     garmin_summary = summarize_garmin(garmin_data)
 
-    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library, get_ctl_trajectory, get_weekly_summary
+    from intervals_client import get_athlete_profile, summarize_athlete_profile, get_workout_library, get_ctl_trajectory, get_weekly_summary, get_current_phase_targets, PERIODIZATION, CTL_RACE_TARGET
     raw_profile = get_athlete_profile()
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
@@ -144,8 +143,11 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     trend_12w_str = " → ".join([str(v) for _, v in ctl_data['trend_12w']])
     yoy = ctl_data['yoy']
 
-    ctl_gap = round(55 - ctl_data['current_ctl'], 1)
+    ctl_gap = round(CTL_RACE_TARGET - ctl_data['current_ctl'], 1)
     ctl_per_week = round(ctl_gap / weeks_remaining_for_ctl, 1)
+    current_phase = get_current_phase_targets()
+    tss_lo, tss_hi = current_phase["tss_target"]
+    ctl_lo, ctl_hi = current_phase["ctl_target"]
 
     weekly = get_weekly_summary()
 
@@ -217,7 +219,7 @@ Runs are prescribed using pace as the PRIMARY metric, RPE as SECONDARY, and HR a
 ## CTL Trajectory
 - 4-week trend: {trend_4w_str} ({ctl_data['trend_4w_direction']})
 - 12-week trend: {trend_12w_str} ({ctl_data['trend_12w_direction']})
-- Target: CTL 55-60 by race week. Currently {ctl_data['current_ctl']} — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week}/week)
+- Race-day target: CTL {CTL_RACE_TARGET} (Olympic distance). Currently {ctl_data['current_ctl']} — need +{ctl_gap} pts in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week}/wk)
 
 ## Year-over-Year CTL (same week)
 - 2024: {yoy['2024']} | 2025: {yoy['2025']} | 2026: {yoy['2026']} (current)
@@ -236,9 +238,20 @@ Runs are prescribed using pace as the PRIMARY metric, RPE as SECONDARY, and HR a
 ## Periodization Context
 - {weeks_to_race} weeks ({days_to_race} days) to race
 - Current phase: {phase_name} — {phase_description}
+- Current phase targets: CTL {ctl_lo}-{ctl_hi} | TSS {tss_lo}-{tss_hi}/wk
+- Race-day CTL target: {CTL_RACE_TARGET} (Olympic distance / 5150)
 - Week structure goal: 3 bikes, 3 runs, 1 rest day (adjust based on readiness)
-- CTL target progression: aim to reach CTL ~55-60 by race week taper
 - Key limiters: bike power (FTP improvement), run off-bike (brick fitness), swim efficiency
+
+## Full Periodization Timeline
+Base 1 (Mar 21-27): CTL 25-30, TSS 260-290/wk — consistency focus
+Base 2 (Mar 28-Apr 10): CTL 30-35, TSS 290-320/wk — aerobic volume
+Late Base (Apr 11-24): CTL 35-40, TSS 320-350/wk — swim integrated
+Build 1 (Apr 25-May 8): CTL 40-45, TSS 350-380/wk — threshold + bricks
+Build 2 (May 9-22): CTL 45-50, TSS 380-420/wk — race-pace intervals
+Peak (May 23-Jun 5): CTL 50-52, TSS 400-450/wk — Olympic distance simulation
+Taper 1 (Jun 6-12): CTL 50-52, TSS 200-250/wk — sharpen + freshen
+Race Week (Jun 13-20): CTL 48-50, TSS 100-150/wk — activation only
 
 ## Zwift Workout Library (personal verified workouts — ONLY recommend from this list for bike sessions)
 {workout_library_text}

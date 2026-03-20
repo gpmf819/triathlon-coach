@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report, format_weekly_summary, get_current_phase_targets, PHASE_DESCRIPTIONS, CTL_RACE_TARGET
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -40,16 +40,14 @@ CACHE_TTL_SECONDS = 3600  # 1 hour
 RACE_DATE = date(2026, 6, 20)
 
 
-def get_training_phase(weeks_to_race):
-    """Return current training phase name and description based on weeks to race."""
-    if weeks_to_race >= 11:
-        return "Base", "Aerobic volume and Z2 foundation. Bike > Run > Swim priority. Swim resumes April."
-    elif weeks_to_race >= 6:
-        return "Build", "Threshold and race-specific intensity. Brick sessions introduced. All three sports active."
-    elif weeks_to_race >= 3:
-        return "Peak", "Race-pace intervals, Olympic distance bricks, high intensity. Volume tapering begins."
-    else:
-        return "Taper", "Volume reduction, race sharpening, leg freshness priority. No new fitness gains."
+def get_training_phase(weeks_to_race=None):
+    """Return current training phase name and description based on periodization timeline."""
+    phase = get_current_phase_targets()
+    phase_name = phase["phase"]
+    tss_lo, tss_hi = phase["tss_target"]
+    base_desc = PHASE_DESCRIPTIONS.get(phase_name, "")
+    description = f"{base_desc} Target {tss_lo}-{tss_hi} TSS/wk."
+    return phase_name, description
 
 
 def refresh_cache():
@@ -285,7 +283,7 @@ Deep sleep: {garmin_summary.get('deep_sleep_hours')}hrs | REM: {garmin_summary.g
 HRV last night: {garmin_summary.get('hrv_last_night')} | Weekly avg: {garmin_summary.get('hrv_weekly_avg')} | Status: {garmin_summary.get('hrv_status')}
 CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
 CTL progress: {ctl_data.get('ctl_progress_pct', 0)}% to target | current pace +{ctl_data.get('current_weekly_gain', 0)}/wk | need +{ctl_data.get('ctl_per_week_needed', 0)}/wk
-Race-day projection at current pace: CTL {ctl_data.get('projected_race_ctl', 'N/A')} (target 55)
+Race-day projection at current pace: CTL {ctl_data.get('projected_race_ctl', 'N/A')} (target {ctl_data.get('ctl_target', CTL_RACE_TARGET)})
 Weekly TSS needed: ~{ctl_data.get('weekly_tss_needed', 'N/A')} | This week so far: {total_tss}
 4-week outlook: CTL {ctl_data.get('projected_ctl_4w_current', 'N/A')} at current pace vs {ctl_data.get('projected_ctl_4w_required', 'N/A')} needed
 YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_data.get('current_ctl')} (current)
@@ -302,12 +300,20 @@ Recent activities: {json.dumps(intervals_summary['recent_activities'], default=s
 
 WEEKLY_REPORT_TRIGGERS = {
     "weekly report", "weekly summary", "how's my week",
-    "weekly recap", "how am i tracking",
+    "weekly recap", "how am i tracking", "give me my week",
 }
 
 
 def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
     """Send message to Claude with full context and conversation history."""
+
+    # Weekly summary: return structured format directly — no Claude generation
+    if user_message.lower().strip() in WEEKLY_REPORT_TRIGGERS and ctl_data:
+        augmented_ctl = dict(ctl_data)
+        augmented_ctl['atl'] = intervals_summary.get('atl')
+        augmented_ctl['tsb'] = intervals_summary.get('tsb')
+        return format_weekly_summary(weekly, augmented_ctl, _cache.get('rpe_data') or [])
+
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     if phone_number not in conversations:
@@ -325,11 +331,6 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     )
 
     full_reply = response.content[0].text
-
-    # Prepend formatted CTL report for weekly summary requests
-    if user_message.lower().strip() in WEEKLY_REPORT_TRIGGERS and ctl_data:
-        ctl_report = format_ctl_report(ctl_data, total_tss_this_week=weekly.get('total_tss', 0))
-        full_reply = ctl_report + "\n\n" + full_reply
 
     # Extract and store workout upload block if present
     workout_name, workout_text = extract_workout_upload(full_reply)
@@ -409,9 +410,9 @@ def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data
     filled = min(int(pct / 5), 19)
     bar = "=" * filled + ">" + " " * (20 - filled - 1)
     ctl_line = (
-        f"\nCTL [{bar}] {ctl_data.get('current_ctl')}/55"
-        f" (+{ctl_data.get('current_weekly_gain', 0)}/wk"
-        f" | need +{ctl_data.get('ctl_per_week_needed', 0)}/wk)"
+        f"\nCTL [{bar}] {ctl_data.get('current_ctl')}/{ctl_data.get('ctl_target', CTL_RACE_TARGET)}"
+        f" | +{ctl_data.get('current_weekly_gain', 0)} this week"
+        f" | need +{ctl_data.get('ctl_per_week_needed', 0)}/wk"
     )
     return message + ctl_line
 
@@ -444,7 +445,7 @@ def whatsapp_webhook():
             if 1 <= rpe <= 10:
                 post_workout_state[from_number]["rpe"] = rpe
                 post_workout_state[from_number]["state"] = "awaiting_feel"
-                reply = "How did you feel? (weak / poor / normal / good / strong)"
+                reply = "How did your body feel? (weak / poor / normal / good / strong)"
                 resp = MessagingResponse()
                 resp.message(reply)
                 return str(resp)
@@ -508,7 +509,7 @@ def whatsapp_webhook():
                 "activity_type": activity.get("type", "workout"),
                 "rpe": None,
             }
-            reply = f"Nice work! Rate your effort from 1-10 (RPE)?"
+            reply = "Nice work! Rate your effort 1-10 (1=very easy, 10=maximal):"
         else:
             reply = "Nice work! No recent activity found in Intervals.icu — make sure it's synced, then try again."
         resp = MessagingResponse()

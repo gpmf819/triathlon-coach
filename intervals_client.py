@@ -9,6 +9,43 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+RACE_DATE = date(2026, 6, 20)
+CTL_RACE_TARGET = 48
+
+PERIODIZATION = [
+    {"phase": "Base 1",    "start": "2026-03-21", "end": "2026-03-27", "ctl_target": (25, 30),  "tss_target": (260, 290)},
+    {"phase": "Base 2",    "start": "2026-03-28", "end": "2026-04-10", "ctl_target": (30, 35),  "tss_target": (290, 320)},
+    {"phase": "Late Base", "start": "2026-04-11", "end": "2026-04-24", "ctl_target": (35, 40),  "tss_target": (320, 350)},
+    {"phase": "Build 1",   "start": "2026-04-25", "end": "2026-05-08", "ctl_target": (40, 45),  "tss_target": (350, 380)},
+    {"phase": "Build 2",   "start": "2026-05-09", "end": "2026-05-22", "ctl_target": (45, 50),  "tss_target": (380, 420)},
+    {"phase": "Peak",      "start": "2026-05-23", "end": "2026-06-05", "ctl_target": (50, 52),  "tss_target": (400, 450)},
+    {"phase": "Taper 1",   "start": "2026-06-06", "end": "2026-06-12", "ctl_target": (50, 52),  "tss_target": (200, 250)},
+    {"phase": "Race Week", "start": "2026-06-13", "end": "2026-06-20", "ctl_target": (48, 50),  "tss_target": (100, 150)},
+]
+
+PHASE_DESCRIPTIONS = {
+    "Base 1":    "Aerobic volume and Z2 foundation. Bike priority. Build consistency.",
+    "Base 2":    "Aerobic volume and Z2 foundation. Bike > Run > Swim. Swim resumes April.",
+    "Late Base": "Extended aerobic base, swim fully integrated. Volume building.",
+    "Build 1":   "Threshold and race-specific intensity. Brick sessions introduced. All three sports active.",
+    "Build 2":   "Race-pace intervals, high intensity. Olympic distance simulation.",
+    "Peak":      "Race-pace intervals, Olympic distance bricks, high intensity. Volume tapering begins.",
+    "Taper 1":   "Volume reduction, race sharpening, leg freshness priority.",
+    "Race Week": "Activation only. Rest and sharpen. No new fitness gains.",
+}
+
+
+def get_current_phase_targets():
+    """Return the current periodization phase dict based on today's date."""
+    today = date.today().isoformat()
+    for phase in PERIODIZATION:
+        if phase["start"] <= today <= phase["end"]:
+            return phase
+    # Before season starts → return first phase; after season ends → last phase
+    if today < PERIODIZATION[0]["start"]:
+        return PERIODIZATION[0]
+    return PERIODIZATION[-1]
+
 
 def get_headers():
     api_key = os.getenv("INTERVALS_API_KEY")
@@ -298,14 +335,15 @@ def get_ctl_trajectory():
             return f"→ stable ({round(delta, 1):+})"
 
     # Race planning constants
-    RACE_DATE_LOCAL = date(2026, 6, 20)
-    CTL_TARGET = 55
-    weeks_to_race = (RACE_DATE_LOCAL - today).days // 7
+    CTL_TARGET = CTL_RACE_TARGET  # 48 for Olympic distance
+    weeks_to_race = (RACE_DATE - today).days // 7
     weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
 
     current_ctl = all_ctl[-1]["ctl"] if all_ctl else 0
     ctl_gap = round(CTL_TARGET - current_ctl, 1)
     ctl_per_week = round(ctl_gap / weeks_remaining_for_ctl, 1)
+
+    current_phase = get_current_phase_targets()
 
     # Current weekly CTL gain derived from 4-week trend
     trend_4w_values = [v for _, v in trend_4w]
@@ -345,12 +383,16 @@ def get_ctl_trajectory():
         "projected_ctl_4w_current": round(current_ctl + (4 * current_4w_gain)),
         "projected_ctl_4w_required": round(current_ctl + (4 * ctl_per_week)),
         "projected_4w_gap": round((4 * ctl_per_week) - (4 * current_4w_gain)),
+        # Current periodization phase
+        "current_phase": current_phase,
+        "current_phase_tss_target": current_phase["tss_target"],
+        "current_phase_ctl_target": current_phase["ctl_target"],
     }
 
 def format_ctl_report(ctl_data, total_tss_this_week=0):
     """Format a WhatsApp-friendly CTL weekly progress report."""
     current = ctl_data['current_ctl'] or 0
-    target = ctl_data['ctl_target']
+    target = ctl_data['ctl_target']  # 48
     pct = ctl_data['ctl_progress_pct']
 
     # ASCII progress bar — 20 chars wide, each char = 5%
@@ -362,28 +404,31 @@ def format_ctl_report(ctl_data, total_tss_this_week=0):
     projected = ctl_data['projected_race_ctl']
     yoy_2025 = yoy.get('2025')
 
-    if projected >= target - 5:
+    phase = ctl_data.get('current_phase', {})
+    phase_name = phase.get('phase', '')
+    tss_lo, tss_hi = ctl_data.get('current_phase_tss_target', (0, 0))
+    ctl_lo, ctl_hi = ctl_data.get('current_phase_ctl_target', (0, 0))
+
+    if projected >= target - 2:
         projection_note = "On track"
     else:
         shortfall = target - projected
         tss_gap = max(ctl_data['weekly_tss_needed'] - ctl_data.get('current_weekly_tss', 0), 0)
-        projection_note = f"Shortfall: {shortfall} pts — increase weekly TSS by ~{tss_gap}"
+        projection_note = f"Shortfall: {shortfall} pts — need ~+{tss_gap} TSS/wk"
 
     yoy_vs_2025 = f"{round(yoy_2025 - current, 1)} pts behind" if yoy_2025 else "N/A"
 
     return f"""*CTL Weekly Report*
 
-Progress to race fitness:
+Progress to race fitness (target: {target}):
 {progress_bar}
 
-Current CTL: {current} | Target: {target}
-Weekly TSS needed: ~{ctl_data['weekly_tss_needed']} TSS/week
-Weekly CTL gain needed: +{ctl_data['ctl_per_week_needed']}/week
-Current pace: +{ctl_data['current_weekly_gain']}/week
+Phase: {phase_name} | CTL target {ctl_lo}-{ctl_hi} | TSS {tss_lo}-{tss_hi}/wk
+Current CTL: {current} | Race-day target: {target}
+CTL gain needed: +{ctl_data['ctl_per_week_needed']}/wk | Current pace: +{ctl_data['current_weekly_gain']}/wk
 
 *Race-day projection:*
 At current pace: CTL {projected} at Tremblant
-At required pace: CTL {target}
 {projection_note}
 
 *4-week projection:*
@@ -560,7 +605,7 @@ def get_recent_rpe_data():
         params={
             "oldest": oldest,
             "newest": newest,
-            "fields": "id,type,start_date_local,icu_training_load,icu_rpe,feel"
+            "fields": "id,type,name,start_date_local,icu_training_load,icu_rpe,feel"
         }
     )
     r.raise_for_status()
@@ -573,8 +618,199 @@ def get_recent_rpe_data():
             result.append({
                 "date": act.get("start_date_local", "")[:10],
                 "type": act.get("type"),
+                "name": act.get("name"),
                 "tss": act.get("icu_training_load"),
                 "rpe": act.get("icu_rpe"),
                 "feel": feel_labels.get(act.get("feel")) if act.get("feel") else None,
             })
     return result
+
+
+def format_weekly_summary(weekly_data, ctl_data, rpe_data):
+    """Return a structured WhatsApp weekly summary string."""
+    today = date.today()
+    weeks_to_race = (RACE_DATE - today).days // 7
+
+    # Phase from periodization
+    current_phase = ctl_data.get('current_phase') or get_current_phase_targets()
+    phase = current_phase.get('phase', 'Base')
+
+    # Header — week of Monday
+    week_start_str = weekly_data.get('week_start', today.isoformat())
+    try:
+        mon_date = datetime.strptime(week_start_str, '%Y-%m-%d')
+        mon_str = mon_date.strftime('%b %d')
+    except Exception:
+        mon_str = week_start_str
+    header = f"*Week of {mon_str} — {phase} | {weeks_to_race} weeks to Tremblant*"
+
+    # FITNESS
+    current_ctl = ctl_data.get('current_ctl') or 0
+    target = ctl_data.get('ctl_target', CTL_RACE_TARGET)
+    pct = ctl_data.get('ctl_progress_pct', round((current_ctl / target) * 100) if target else 0)
+    atl = ctl_data.get('atl')
+    tsb = ctl_data.get('tsb')
+
+    # CTL week-over-week change from trend_4w (last two weekly values)
+    trend_4w = ctl_data.get('trend_4w', [])
+    if len(trend_4w) >= 2:
+        ctl_change = round(trend_4w[-1][1] - trend_4w[-2][1], 1)
+    else:
+        ctl_change = 0.0
+    ctl_change_str = f"+{ctl_change}" if ctl_change >= 0 else str(ctl_change)
+
+    atl_str = f" | ATL {round(atl)}" if atl is not None else ""
+    tsb_str = f" | TSB {tsb:+.0f}" if tsb is not None else ""
+
+    filled = min(int(pct / 5), 19)
+    bar = "=" * filled + ">" + " " * (20 - filled - 1)
+
+    fitness_section = (
+        f"*FITNESS*\n"
+        f"CTL {round(current_ctl)} ({ctl_change_str}){atl_str}{tsb_str}\n"
+        f"[{bar}] {round(current_ctl)}/{target} ({pct}%)"
+    )
+
+    # VOLUME
+    def fmt_duration(mins):
+        h = int(mins) // 60
+        m = int(mins) % 60
+        return f"{h}:{m:02d}"
+
+    def fmt_sport(label, data, has_distance=True):
+        count = data.get('count', 0)
+        dur = fmt_duration(data.get('duration_min', 0))
+        tss = round(data.get('tss', 0))
+        return f"{label}  {count}x | {dur} | {tss} TSS"
+
+    bike = weekly_data.get('bike', {})
+    run = weekly_data.get('run', {})
+    swim = weekly_data.get('swim', {})
+    other = weekly_data.get('other', {})
+    total_tss = weekly_data.get('total_tss', 0)
+    total_count = sum(d.get('count', 0) for d in [bike, run, swim, other])
+    total_dur = sum(d.get('duration_min', 0) for d in [bike, run, swim, other])
+
+    volume_section = (
+        f"*VOLUME*\n"
+        f"{fmt_sport('Bike: ', bike)}\n"
+        f"{fmt_sport('Run:  ', run)}\n"
+        f"{fmt_sport('Swim: ', swim)}\n"
+        f"{fmt_sport('Other:', other)}\n"
+        f"─────────────────────────────\n"
+        f"Total: {total_count}x | {fmt_duration(total_dur)} | {total_tss} TSS"
+    )
+
+    # EFFORT & FEEL — filter rpe_data to current week
+    try:
+        week_start_dt = datetime.strptime(week_start_str, '%Y-%m-%d').date()
+    except Exception:
+        week_start_dt = today - timedelta(days=today.weekday())
+    week_end_dt = week_start_dt + timedelta(days=7)
+
+    feel_words_to_int = {"weak": 1, "poor": 2, "normal": 3, "good": 4, "strong": 5}
+    feel_labels_inv = {1: "weak", 2: "poor", 3: "normal", 4: "good", 5: "strong"}
+
+    week_rpe = [
+        e for e in (rpe_data or [])
+        if week_start_dt.isoformat() <= e.get('date', '') < week_end_dt.isoformat()
+        and e.get('rpe') is not None
+    ]
+
+    if not week_rpe:
+        effort_section = "*EFFORT & FEEL*\nNo RPE data logged this week"
+    else:
+        avg_rpe = round(sum(e['rpe'] for e in week_rpe) / len(week_rpe), 1)
+
+        feels = [feel_words_to_int[e['feel']] for e in week_rpe if e.get('feel') and e['feel'] in feel_words_to_int]
+        if feels:
+            avg_feel_word = feel_labels_inv.get(round(sum(feels) / len(feels)), 'normal')
+        else:
+            avg_feel_word = 'N/A'
+
+        hardest = max(week_rpe, key=lambda e: e['rpe'])
+        easiest = min(week_rpe, key=lambda e: e['rpe'])
+
+        def activity_label(e):
+            return e.get('name') or e.get('type', 'Activity')
+
+        effort_section = (
+            f"*EFFORT & FEEL*\n"
+            f"Avg RPE: {avg_rpe}/10 | Avg Feel: {avg_feel_word}\n"
+            f"Hardest: {activity_label(hardest)} — RPE {hardest['rpe']}, {hardest.get('feel') or 'N/A'}\n"
+            f"Easiest: {activity_label(easiest)} — RPE {easiest['rpe']}, {easiest.get('feel') or 'N/A'}"
+        )
+
+    # PROJECTION
+    projected_race_ctl = ctl_data.get('projected_race_ctl', 0)
+    ctl_gap = round(target - current_ctl, 1)
+    ctl_per_week = ctl_data.get('ctl_per_week_needed', 0)
+    current_gain = ctl_data.get('current_weekly_gain', 0)
+
+    # Phase targets for TSS comparison
+    tss_lo, tss_hi = ctl_data.get('current_phase_tss_target', (0, 0))
+    ctl_lo, ctl_hi = ctl_data.get('current_phase_ctl_target', (0, 0))
+
+    # Next phase
+    today_iso = today.isoformat()
+    next_phase = None
+    for i, p in enumerate(PERIODIZATION):
+        if p["start"] <= today_iso <= p["end"] and i + 1 < len(PERIODIZATION):
+            next_phase = PERIODIZATION[i + 1]
+            break
+
+    def fmt_phase_date(d_str):
+        try:
+            return datetime.strptime(d_str, '%Y-%m-%d').strftime('%b %d')
+        except Exception:
+            return d_str
+
+    phase_range = f"{fmt_phase_date(current_phase['start'])} - {fmt_phase_date(current_phase['end'])}"
+    phase_line = f"Phase: {phase} ({phase_range}) → CTL {ctl_lo}-{ctl_hi}, TSS {tss_lo}-{tss_hi}/wk"
+
+    if next_phase:
+        next_line = f"Next:  {next_phase['phase']} starts {fmt_phase_date(next_phase['start'])}"
+    else:
+        next_line = "Next:  Race week"
+
+    # Shortfall indicator for race projection
+    race_gap = target - projected_race_ctl
+    if race_gap <= 1:
+        race_indicator = "on target"
+    else:
+        race_indicator = f"{race_gap} pts short"
+
+    # TSS vs phase target (compare to low end)
+    tss_vs_phase = total_tss - tss_lo
+    tss_vs_str = f"+{tss_vs_phase}" if tss_vs_phase >= 0 else str(tss_vs_phase)
+
+    projection_section = (
+        f"*PROJECTION*\n"
+        f"{phase_line}\n"
+        f"{next_line}\n\n"
+        f"Race-day target: CTL {target} | Current: {round(current_ctl)} | Gap: {ctl_gap} pts\n"
+        f"At current pace (+{current_gain}/wk) → CTL {projected_race_ctl} race week ({race_indicator})\n"
+        f"At required pace (+{ctl_per_week}/wk) → CTL {target} race week (on target)\n"
+        f"This week: {total_tss} TSS (target {tss_lo}-{tss_hi}, {tss_vs_str} vs target)"
+    )
+
+    # YEAR OVER YEAR
+    yoy = ctl_data.get('yoy', {})
+    ctl_2026 = yoy.get('2026') or round(current_ctl)
+    ctl_2025 = yoy.get('2025')
+    ctl_2024 = yoy.get('2024')
+
+    if ctl_2025 is not None:
+        yoy_diff = round(ctl_2025 - current_ctl, 1)
+        direction = "behind" if yoy_diff > 0 else "ahead"
+        yoy_vs = f"vs 2025: {abs(yoy_diff)} pts {direction}"
+    else:
+        yoy_vs = "vs 2025: N/A"
+
+    yoy_section = (
+        f"*YEAR OVER YEAR*\n"
+        f"2026: {ctl_2026} | 2025: {ctl_2025 or 'N/A'} | 2024: {ctl_2024 or 'N/A'}\n"
+        f"{yoy_vs}"
+    )
+
+    return "\n\n".join([header, fitness_section, volume_section, effort_section, projection_section, yoy_section])
