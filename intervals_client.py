@@ -415,9 +415,9 @@ def create_run_workout(name, workout_text, target_date=None):
 
 
 def _icu_cfg():
-    """Auth config for new ICU_API_KEY-based calls."""
+    """Auth config for Intervals.icu API calls."""
     import base64
-    api_key = os.getenv("ICU_API_KEY")
+    api_key = os.getenv("INTERVALS_API_KEY")
     athlete_id = os.getenv("INTERVALS_ATHLETE_ID")
     token = base64.b64encode(f"API_KEY:{api_key}".encode()).decode()
     return {
