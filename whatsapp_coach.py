@@ -231,11 +231,20 @@ def strip_workout_upload_block(text):
 
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
     """Build the live data context block."""
-    today = date.today().strftime("%A, %B %d, %Y")
-    tomorrow = (date.today() + timedelta(days=1)).strftime("%A, %B %d, %Y")
+    today_date = date.today()
+    today = today_date.strftime("%A, %B %d, %Y")
+    tomorrow = (today_date + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
-    weeks_to_race = (RACE_DATE - date.today()).days // 7
-    days_to_race = (RACE_DATE - date.today()).days
+    # Remaining days in the week (Sun=6, so days left after today = 6 - weekday())
+    days_remaining = 6 - today_date.weekday()
+    remaining_day_names = [
+        (today_date + timedelta(days=i)).strftime("%A")
+        for i in range(1, days_remaining + 1)
+    ]
+    remaining_days_str = f"{days_remaining} days remaining this week: {', '.join(remaining_day_names)}" if remaining_day_names else "today is the last day of the week (Sunday)"
+
+    weeks_to_race = (RACE_DATE - today_date).days // 7
+    days_to_race = (RACE_DATE - today_date).days
     weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
@@ -247,7 +256,7 @@ def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, use
 
     block = f"""
 [LIVE DATA - {today}]
-Tomorrow is {tomorrow}.
+Tomorrow is {tomorrow}. {remaining_days_str}.
 Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
 Current phase: {phase_name} — {phase_description}
 Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.get('sleep_score')}
