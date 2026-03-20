@@ -296,8 +296,27 @@ def get_ctl_trajectory():
         else:
             return f"→ stable ({round(delta, 1):+})"
 
+    # Race planning constants
+    RACE_DATE_LOCAL = date(2026, 6, 20)
+    CTL_TARGET = 55
+    weeks_to_race = (RACE_DATE_LOCAL - today).days // 7
+    weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
+
+    current_ctl = all_ctl[-1]["ctl"] if all_ctl else 0
+    ctl_gap = round(CTL_TARGET - current_ctl, 1)
+    ctl_per_week = round(ctl_gap / weeks_remaining_for_ctl, 1)
+
+    # Current weekly CTL gain derived from 4-week trend
+    trend_4w_values = [v for _, v in trend_4w]
+    if len(trend_4w_values) >= 2:
+        current_4w_gain = round(
+            (trend_4w_values[-1] - trend_4w_values[0]) / len(trend_4w_values), 1
+        )
+    else:
+        current_4w_gain = 0.0
+
     return {
-        "current_ctl": all_ctl[-1]["ctl"] if all_ctl else None,
+        "current_ctl": current_ctl if all_ctl else None,
         "trend_4w": trend_4w,
         "trend_4w_direction": trend_direction(trend_4w),
         "trend_12w": trend_12w,
@@ -305,9 +324,69 @@ def get_ctl_trajectory():
         "yoy": {
             "2024": avg_ctl(y2024),
             "2025": avg_ctl(y2025),
-            "2026": all_ctl[-1]["ctl"] if all_ctl else None
-        }
+            "2026": current_ctl if all_ctl else None,
+        },
+        # Computed planning fields
+        "ctl_target": CTL_TARGET,
+        "ctl_progress_pct": round((current_ctl / CTL_TARGET) * 100),
+        "ctl_per_week_needed": ctl_per_week,
+        "current_weekly_gain": current_4w_gain,
+        "weeks_remaining_for_ctl": weeks_remaining_for_ctl,
+        "weekly_tss_needed": round(ctl_per_week * 49),
+        "projected_race_ctl": round(current_ctl + (weeks_remaining_for_ctl * current_4w_gain)),
+        "projected_ctl_4w_current": round(current_ctl + (4 * current_4w_gain)),
+        "projected_ctl_4w_required": round(current_ctl + (4 * ctl_per_week)),
+        "projected_4w_gap": round((4 * ctl_per_week) - (4 * current_4w_gain)),
     }
+
+def format_ctl_report(ctl_data, total_tss_this_week=0):
+    """Format a WhatsApp-friendly CTL weekly progress report."""
+    current = ctl_data['current_ctl'] or 0
+    target = ctl_data['ctl_target']
+    pct = ctl_data['ctl_progress_pct']
+
+    # ASCII progress bar — 20 chars wide, each char = 5%
+    filled = min(int(pct / 5), 19)
+    bar = "=" * filled + ">" + " " * (20 - filled - 1)
+    progress_bar = f"[{bar}] {current}/{target} ({pct}%)"
+
+    yoy = ctl_data['yoy']
+    projected = ctl_data['projected_race_ctl']
+    yoy_2025 = yoy.get('2025')
+
+    if projected >= target - 5:
+        projection_note = "On track"
+    else:
+        shortfall = target - projected
+        tss_gap = max(ctl_data['weekly_tss_needed'] - (total_tss_this_week or 0), 0)
+        projection_note = f"Shortfall: {shortfall} pts — increase weekly TSS by ~{tss_gap}"
+
+    yoy_vs_2025 = f"{round(yoy_2025 - current, 1)} pts behind" if yoy_2025 else "N/A"
+
+    return f"""*CTL Weekly Report*
+
+Progress to race fitness:
+{progress_bar}
+
+Current CTL: {current} | Target: {target}
+Weekly TSS needed: ~{ctl_data['weekly_tss_needed']} TSS/week
+Weekly CTL gain needed: +{ctl_data['ctl_per_week_needed']}/week
+Current pace: +{ctl_data['current_weekly_gain']}/week
+
+*Race-day projection:*
+At current pace: CTL {projected} at Tremblant
+At required pace: CTL {target}
+{projection_note}
+
+*4-week projection:*
+At current pace: CTL {ctl_data['projected_ctl_4w_current']} in 4 weeks
+At required pace: CTL {ctl_data['projected_ctl_4w_required']} in 4 weeks
+Gap: {ctl_data['projected_4w_gap']} points to close
+
+*Year-over-year (same week):*
+2024: {yoy.get('2024')} | 2025: {yoy_2025} | 2026: {current}
+vs 2025: {yoy_vs_2025}"""
+
 
 def get_workout_library():
     """Build a personal workout library from historical CoachChris indoor rides."""

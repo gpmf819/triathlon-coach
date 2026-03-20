@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -272,11 +272,8 @@ def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, use
     weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
-    ctl_trend_4w = " → ".join([str(v) for _, v in ctl_data.get('trend_4w', [])])
     ctl_trend_yoy = ctl_data.get('yoy', {})
-    current_ctl = ctl_data.get('current_ctl') or 0
-    ctl_gap = round(55 - current_ctl, 1)
-    ctl_per_week_needed = round(ctl_gap / weeks_remaining_for_ctl, 1)
+    total_tss = weekly.get('total_tss', 0)
 
     block = f"""
 [LIVE DATA - {today}]
@@ -287,10 +284,12 @@ Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.ge
 Deep sleep: {garmin_summary.get('deep_sleep_hours')}hrs | REM: {garmin_summary.get('rem_sleep_hours')}hrs
 HRV last night: {garmin_summary.get('hrv_last_night')} | Weekly avg: {garmin_summary.get('hrv_weekly_avg')} | Status: {garmin_summary.get('hrv_status')}
 CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
-CTL 4-week trend: {ctl_trend_4w} ({ctl_data.get('trend_4w_direction', 'N/A')})
-YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_trend_yoy.get('2026')} (current)
-CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week_needed}/week)
-Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
+CTL progress: {ctl_data.get('ctl_progress_pct', 0)}% to target | current pace +{ctl_data.get('current_weekly_gain', 0)}/wk | need +{ctl_data.get('ctl_per_week_needed', 0)}/wk
+Race-day projection at current pace: CTL {ctl_data.get('projected_race_ctl', 'N/A')} (target 55)
+Weekly TSS needed: ~{ctl_data.get('weekly_tss_needed', 'N/A')} | This week so far: {total_tss}
+4-week outlook: CTL {ctl_data.get('projected_ctl_4w_current', 'N/A')} at current pace vs {ctl_data.get('projected_ctl_4w_required', 'N/A')} needed
+YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2026={ctl_data.get('current_ctl')} (current)
+Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {total_tss} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
 {_format_rpe_block(_cache.get('rpe_data'))}"""
     if user_message:
@@ -299,6 +298,12 @@ Recent activities: {json.dumps(intervals_summary['recent_activities'], default=s
         block += "\n[TASK]\nGenerate tomorrow's workout recommendation as a proactive nightly WhatsApp message. Be concise — opening line with phase/countdown, workout with pace+RPE for runs or power zones for bike, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. For runs include [WORKOUT_UPLOAD] block. End with: 'Reply confirm to upload to Garmin or reply to adjust'\n"
 
     return block
+
+
+WEEKLY_REPORT_TRIGGERS = {
+    "weekly report", "weekly summary", "how's my week",
+    "weekly recap", "how am i tracking",
+}
 
 
 def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summary, weekly, ctl_data, system_prompt):
@@ -320,6 +325,11 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     )
 
     full_reply = response.content[0].text
+
+    # Prepend formatted CTL report for weekly summary requests
+    if user_message.lower().strip() in WEEKLY_REPORT_TRIGGERS and ctl_data:
+        ctl_report = format_ctl_report(ctl_data, total_tss_this_week=weekly.get('total_tss', 0))
+        full_reply = ctl_report + "\n\n" + full_reply
 
     # Extract and store workout upload block if present
     workout_name, workout_text = extract_workout_upload(full_reply)
@@ -392,7 +402,18 @@ def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data
         }
         print(f"Nightly: stored pending upload: {workout_name}")
 
-    return strip_workout_upload_block(full_reply)
+    message = strip_workout_upload_block(full_reply)
+
+    # Append compact CTL progress bar
+    pct = ctl_data.get('ctl_progress_pct', 0)
+    filled = min(int(pct / 5), 19)
+    bar = "=" * filled + ">" + " " * (20 - filled - 1)
+    ctl_line = (
+        f"\nCTL [{bar}] {ctl_data.get('current_ctl')}/55"
+        f" (+{ctl_data.get('current_weekly_gain', 0)}/wk"
+        f" | need +{ctl_data.get('ctl_per_week_needed', 0)}/wk)"
+    )
+    return message + ctl_line
 
 
 WORKOUT_DONE_TRIGGERS = {"workout done", "done", "finished", "completed workout"}
