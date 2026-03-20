@@ -1,6 +1,7 @@
 import requests
 import os
 import re
+import math
 import statistics
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -332,7 +333,13 @@ def get_ctl_trajectory():
         "ctl_per_week_needed": ctl_per_week,
         "current_weekly_gain": current_4w_gain,
         "weeks_remaining_for_ctl": weeks_remaining_for_ctl,
-        "weekly_tss_needed": round(ctl_per_week * 49),
+        # Correct CTL model: solve for constant daily TSS needed to reach target in n days
+        # CTL(n) = CTL₀ * exp(-n/42) + daily_tss * (1 - exp(-n/42)) = target
+        # => daily_tss = (target - CTL₀ * decay) / (1 - decay)
+        "weekly_tss_needed": round(
+            ((CTL_TARGET - current_ctl * math.exp(-weeks_remaining_for_ctl * 7 / 42))
+             / (1 - math.exp(-weeks_remaining_for_ctl * 7 / 42))) * 7
+        ),
         "current_weekly_tss": round(current_4w_gain * 49),
         "projected_race_ctl": round(current_ctl + (weeks_remaining_for_ctl * current_4w_gain)),
         "projected_ctl_4w_current": round(current_ctl + (4 * current_4w_gain)),
