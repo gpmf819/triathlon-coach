@@ -9,7 +9,7 @@ import re
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data
 from coach import summarize_garmin, summarize_intervals
 
 load_dotenv()
@@ -22,11 +22,17 @@ conversations = {}
 # Pending workout uploads per user (stored after coach recommends a run)
 pending_uploads = {}
 
+# Post-workout RPE/feel capture state per user
+post_workout_state = {}
+
+FEEL_MAP = {"weak": 1, "poor": 2, "normal": 3, "good": 4, "strong": 5}
+
 # Cache for slow data (refreshed hourly at most)
 _cache = {
     "workout_library_text": None,
     "system_prompt": None,
     "ctl_data": None,
+    "rpe_data": None,
     "last_refreshed": 0,
 }
 CACHE_TTL_SECONDS = 3600  # 1 hour
@@ -70,6 +76,12 @@ def refresh_cache():
     except Exception as e:
         print(f"CTL trajectory error: {e}")
         ctl_data = _cache["ctl_data"] or {}
+
+    try:
+        _cache["rpe_data"] = get_recent_rpe_data()
+        print("OK RPE data loaded")
+    except Exception as e:
+        print(f"RPE data error: {e}")
 
     _cache["system_prompt"] = build_system_prompt(workout_library_text)
     _cache["last_refreshed"] = now
@@ -229,6 +241,18 @@ def strip_workout_upload_block(text):
     return re.sub(r'\[WORKOUT_UPLOAD\].*?\[/WORKOUT_UPLOAD\]', '', text, flags=re.DOTALL).strip()
 
 
+def _format_rpe_block(rpe_data):
+    """Format cached RPE data for injection into the context block."""
+    if not rpe_data:
+        return ""
+    lines = ["Recent RPE (last 14 days):"]
+    for entry in rpe_data:
+        feel_str = f" | feel: {entry['feel']}" if entry.get("feel") else ""
+        tss_str = f" | TSS {entry['tss']}" if entry.get("tss") else ""
+        lines.append(f"{entry['date']} | {entry['type']}{tss_str} | RPE {entry['rpe']}{feel_str}")
+    return "\n".join(lines)
+
+
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
     """Build the live data context block."""
     today_date = date.today()
@@ -268,7 +292,7 @@ YoY CTL: 2024={ctl_trend_yoy.get('2024')} | 2025={ctl_trend_yoy.get('2025')} | 2
 CTL target: 55-60 by race week — need +{ctl_gap} points in {weeks_remaining_for_ctl} weeks (~+{ctl_per_week_needed}/week)
 Week so far (since {weekly.get('week_start', 'N/A')}): Bike {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)} | Run {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)} | Swim {weekly.get('swim', {}).get('count', 0)}x | Other {weekly.get('other', {}).get('count', 0)}x {weekly.get('other', {}).get('duration_min', 0)}min | Total TSS {weekly.get('total_tss', 0)} ({weekly.get('days_done', 0)}/7 days)
 Recent activities: {json.dumps(intervals_summary['recent_activities'], default=str)}
-"""
+{_format_rpe_block(_cache.get('rpe_data'))}"""
     if user_message:
         block += f"\n[ATHLETE MESSAGE]\n{user_message}\n"
     else:
@@ -371,17 +395,101 @@ def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data
     return strip_workout_upload_block(full_reply)
 
 
+WORKOUT_DONE_TRIGGERS = {"workout done", "done", "finished", "completed workout"}
+
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_webhook():
     incoming_msg = request.values.get("Body", "").strip()
     from_number = request.values.get("From", "")
+    msg_lower = incoming_msg.lower()
 
     print(f"Message from {from_number}: {incoming_msg}")
 
     # Handle confirm/upload trigger
-    if incoming_msg.lower() in ["confirm", "upload", "yes upload", "upload it"]:
+    if msg_lower in ["confirm", "upload", "yes upload", "upload it"]:
         reply = handle_confirm(from_number)
         print(f"Upload reply: {reply}")
+        resp = MessagingResponse()
+        resp.message(reply)
+        return str(resp)
+
+    # Post-workout RPE capture state machine
+    state = post_workout_state.get(from_number, {}).get("state")
+
+    if state == "awaiting_rpe":
+        try:
+            rpe = int(msg_lower.strip())
+            if 1 <= rpe <= 10:
+                post_workout_state[from_number]["rpe"] = rpe
+                post_workout_state[from_number]["state"] = "awaiting_feel"
+                reply = "How did you feel? (weak / poor / normal / good / strong)"
+                resp = MessagingResponse()
+                resp.message(reply)
+                return str(resp)
+        except ValueError:
+            pass
+        resp = MessagingResponse()
+        resp.message("Please reply with a number from 1 to 10.")
+        return str(resp)
+
+    if state == "awaiting_feel":
+        feel_word = msg_lower.strip()
+        if feel_word in FEEL_MAP:
+            feel_int = FEEL_MAP[feel_word]
+            rpe = post_workout_state[from_number]["rpe"]
+            activity_id = post_workout_state[from_number]["activity_id"]
+            activity_type = post_workout_state[from_number].get("activity_type", "workout")
+            post_workout_state.pop(from_number, None)
+
+            try:
+                save_activity_rpe(activity_id, rpe, feel_int)
+                # Invalidate RPE cache so next refresh picks up the new data
+                _cache["rpe_data"] = None
+            except Exception as e:
+                print(f"RPE save error: {e}")
+
+            # Route through Claude for the one-line coaching note
+            garmin_summary, intervals_summary, weekly = get_coaching_context()
+            system_prompt, ctl_data = get_cached()
+            note_prompt = (
+                f"[POST-WORKOUT LOGGED] Activity: {activity_type} | "
+                f"RPE: {rpe}/10 | Feel: {feel_word} ({feel_int}/5). "
+                f"Saved to Intervals.icu. Give a single coaching sentence acknowledging this effort "
+                f"in context of current training load. No workout recommendation."
+            )
+            coach_note = chat_with_coach(
+                note_prompt, from_number,
+                garmin_summary, intervals_summary,
+                weekly, ctl_data, system_prompt
+            )
+            reply = f"Logged — RPE {rpe}/10, feel: {feel_word}.\n{coach_note}"
+            resp = MessagingResponse()
+            resp.message(reply)
+            return str(resp)
+        else:
+            resp = MessagingResponse()
+            resp.message("Please reply with one of: weak / poor / normal / good / strong")
+            return str(resp)
+
+    # Workout-done trigger
+    if msg_lower in WORKOUT_DONE_TRIGGERS:
+        try:
+            activity = get_most_recent_activity()
+        except Exception as e:
+            print(f"Post-workout activity lookup error: {e}")
+            activity = None
+
+        if activity:
+            post_workout_state[from_number] = {
+                "state": "awaiting_rpe",
+                "activity_id": activity["id"],
+                "activity_type": activity.get("type", "workout"),
+                "rpe": None,
+            }
+            reply = f"Nice work! Rate your effort from 1-10 (RPE)?"
+        else:
+            reply = "Nice work! No recent activity found in Intervals.icu — make sure it's synced, then try again."
         resp = MessagingResponse()
         resp.message(reply)
         return str(resp)

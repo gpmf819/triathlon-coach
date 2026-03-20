@@ -412,3 +412,82 @@ def create_run_workout(name, workout_text, target_date=None):
         "event_id": result.get("id"),
         "steps": steps
     }
+
+
+def _icu_cfg():
+    """Auth config for new ICU_API_KEY-based calls."""
+    import base64
+    api_key = os.getenv("ICU_API_KEY")
+    athlete_id = os.getenv("INTERVALS_ATHLETE_ID")
+    token = base64.b64encode(f"API_KEY:{api_key}".encode()).decode()
+    return {
+        "base_url": "https://intervals.icu/api/v1",
+        "athlete_id": athlete_id,
+        "headers": {"Authorization": f"Basic {token}"},
+    }
+
+
+def get_most_recent_activity():
+    """Return the most recent activity from today or yesterday, with id and type."""
+    cfg = _icu_cfg()
+    oldest = (date.today() - timedelta(days=1)).isoformat()
+    newest = (date.today() + timedelta(days=1)).isoformat()
+    r = requests.get(
+        f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities",
+        headers=cfg["headers"],
+        params={"oldest": oldest, "newest": newest, "fields": "id,type,name,start_date_local"}
+    )
+    r.raise_for_status()
+    acts = r.json()
+    if not acts:
+        return None
+    act = acts[0]  # API returns newest first
+    return {
+        "id": act.get("id"),
+        "type": act.get("type"),
+        "name": act.get("name"),
+        "date": act.get("start_date_local", "")[:10],
+    }
+
+
+def save_activity_rpe(activity_id, rpe, feel):
+    """PATCH an activity with RPE (1-10) and feel (1-5)."""
+    cfg = _icu_cfg()
+    r = requests.patch(
+        f"{cfg['base_url']}/activity/{activity_id}",
+        headers={**cfg["headers"], "Content-Type": "application/json"},
+        json={"icu_rpe": rpe, "feel": feel}
+    )
+    r.raise_for_status()
+    return r.json()
+
+
+def get_recent_rpe_data():
+    """Return activities from the last 14 days that have RPE logged."""
+    cfg = _icu_cfg()
+    oldest = (date.today() - timedelta(days=14)).isoformat()
+    newest = (date.today() + timedelta(days=1)).isoformat()
+    r = requests.get(
+        f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities",
+        headers=cfg["headers"],
+        params={
+            "oldest": oldest,
+            "newest": newest,
+            "fields": "id,type,start_date_local,icu_training_load,icu_rpe,feel"
+        }
+    )
+    r.raise_for_status()
+    acts = r.json()
+
+    feel_labels = {1: "weak", 2: "poor", 3: "normal", 4: "good", 5: "strong"}
+    result = []
+    for act in acts:
+        if act.get("icu_rpe") is not None:
+            result.append({
+                "date": act.get("start_date_local", "")[:10],
+                "type": act.get("type"),
+                "tss": act.get("icu_training_load"),
+                "rpe": act.get("icu_rpe"),
+                "feel": feel_labels.get(act.get("feel")) if act.get("feel") else None,
+            })
+    return result
