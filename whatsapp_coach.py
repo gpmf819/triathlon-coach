@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from garmin_client import get_readiness_data
 from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report, format_weekly_summary, get_current_phase_targets, PHASE_DESCRIPTIONS, CTL_RACE_TARGET
 from coach import summarize_garmin, summarize_intervals
+from utils import get_system_time_block
 
 load_dotenv()
 
@@ -158,6 +159,13 @@ Main set 3x
 - 8m 5:05-5:20/km, RPE 6-7/10. HR confirms 154-162 after 90s
 - 3m 6:10/km, RPE 3/10 recovery
 
+## Date and Time Rules
+- The [SYSTEM_TIME] block in the most recent user message is always the authoritative date/time
+- workout_recommendation_target_date is the ONLY date to use for workout recommendations
+- Always recommend workouts for workout_recommendation_target_date — never for any other date
+- Dates in earlier conversation history may be stale — always defer to the most recent [SYSTEM_TIME] block
+- Never infer or calculate dates yourself — use only what is provided in [SYSTEM_TIME]
+
 ## Your Coaching Style
 - Conversational but precise — like a coach texting an athlete
 - Keep responses concise for WhatsApp (no walls of text)
@@ -254,8 +262,6 @@ def _format_rpe_block(rpe_data):
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
     """Build the live data context block."""
     today_date = date.today()
-    today = today_date.strftime("%A, %B %d, %Y")
-    tomorrow = (today_date + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     # Remaining days in the week (Sun=6, so days left after today = 6 - weekday())
     days_remaining = 6 - today_date.weekday()
@@ -273,9 +279,10 @@ def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, use
     ctl_trend_yoy = ctl_data.get('yoy', {})
     total_tss = weekly.get('total_tss', 0)
 
-    block = f"""
-[LIVE DATA - {today}]
-Tomorrow is {tomorrow}. {remaining_days_str}.
+    block = f"""{get_system_time_block()}
+
+[LIVE DATA]
+{remaining_days_str}.
 Weeks to race: {weeks_to_race} ({days_to_race} days until June 20, 2026)
 Current phase: {phase_name} — {phase_description}
 Sleep: {garmin_summary.get('sleep_duration_hours')}hrs, score {garmin_summary.get('sleep_score')}
@@ -346,8 +353,8 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
 
     history.append({"role": "assistant", "content": full_reply})  # keep full reply in history
 
-    if len(history) > 20:
-        conversations[phone_number] = history[-20:]
+    if len(history) > 8:
+        conversations[phone_number] = history[-8:]
 
     return reply
 

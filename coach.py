@@ -2,6 +2,7 @@ import anthropic
 import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, date
+from utils import get_system_time_block
 
 load_dotenv()
 
@@ -119,9 +120,6 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
 
-    today_str = datetime.now().strftime("%A, %B %d, %Y")
-    tomorrow_str = (datetime.now() + timedelta(days=1)).strftime("%A, %B %d, %Y")
-
     # Dynamic race countdown
     race_date = date(2026, 6, 20)
     weeks_to_race = (race_date - date.today()).days // 7
@@ -168,9 +166,11 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
             "goal": "Top 5 age group finish. Key gains on bike and run.",
         }
 
-    prompt = f"""You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
+    prompt = f"""{get_system_time_block()}
 
-Today is {today_str}. Tomorrow is {tomorrow_str}. Your workout recommendation is for tomorrow.
+You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
+
+Your workout recommendation is for workout_recommendation_target_date as specified in [SYSTEM_TIME] above.
 
 ## Athlete Profile
 - Name: {athlete_profile['name']}, Age: 44, Male, 75kg
