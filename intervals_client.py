@@ -626,7 +626,7 @@ def get_recent_rpe_data():
     return result
 
 
-def format_weekly_summary(weekly_data, ctl_data, rpe_data):
+def format_weekly_summary(weekly_data, ctl_data):
     """Return a structured WhatsApp weekly summary string."""
     today = date.today()
     weeks_to_race = (RACE_DATE - today).days // 7
@@ -701,46 +701,6 @@ def format_weekly_summary(weekly_data, ctl_data, rpe_data):
         f"Total: {total_count}x | {fmt_duration(total_dur)} | {total_tss} TSS"
     )
 
-    # EFFORT & FEEL — filter rpe_data to current week
-    try:
-        week_start_dt = datetime.strptime(week_start_str, '%Y-%m-%d').date()
-    except Exception:
-        week_start_dt = today - timedelta(days=today.weekday())
-    week_end_dt = week_start_dt + timedelta(days=7)
-
-    feel_words_to_int = {"weak": 1, "poor": 2, "normal": 3, "good": 4, "strong": 5}
-    feel_labels_inv = {1: "weak", 2: "poor", 3: "normal", 4: "good", 5: "strong"}
-
-    week_rpe = [
-        e for e in (rpe_data or [])
-        if week_start_dt.isoformat() <= e.get('date', '') < week_end_dt.isoformat()
-        and e.get('rpe') is not None
-    ]
-
-    if not week_rpe:
-        effort_section = "*EFFORT & FEEL*\nNo RPE data logged this week"
-    else:
-        avg_rpe = round(sum(e['rpe'] for e in week_rpe) / len(week_rpe), 1)
-
-        feels = [feel_words_to_int[e['feel']] for e in week_rpe if e.get('feel') and e['feel'] in feel_words_to_int]
-        if feels:
-            avg_feel_word = feel_labels_inv.get(round(sum(feels) / len(feels)), 'normal')
-        else:
-            avg_feel_word = 'N/A'
-
-        hardest = max(week_rpe, key=lambda e: e['rpe'])
-        easiest = min(week_rpe, key=lambda e: e['rpe'])
-
-        def activity_label(e):
-            return e.get('name') or e.get('type', 'Activity')
-
-        effort_section = (
-            f"*EFFORT & FEEL*\n"
-            f"Avg RPE: {avg_rpe}/10 | Avg Feel: {avg_feel_word}\n"
-            f"Hardest: {activity_label(hardest)} — RPE {hardest['rpe']}, {hardest.get('feel') or 'N/A'}\n"
-            f"Easiest: {activity_label(easiest)} — RPE {easiest['rpe']}, {easiest.get('feel') or 'N/A'}"
-        )
-
     # PROJECTION
     projected_race_ctl = ctl_data.get('projected_race_ctl', 0)
     ctl_gap = round(target - current_ctl, 1)
@@ -813,4 +773,4 @@ def format_weekly_summary(weekly_data, ctl_data, rpe_data):
         f"{yoy_vs}"
     )
 
-    return "\n\n".join([header, fitness_section, volume_section, effort_section, projection_section, yoy_section])
+    return "\n\n".join([header, fitness_section, volume_section, projection_section, yoy_section])

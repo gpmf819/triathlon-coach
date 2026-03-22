@@ -319,7 +319,7 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
         augmented_ctl = dict(ctl_data)
         augmented_ctl['atl'] = intervals_summary.get('atl')
         augmented_ctl['tsb'] = intervals_summary.get('tsb')
-        return format_weekly_summary(weekly, augmented_ctl, _cache.get('rpe_data') or [])
+        return format_weekly_summary(weekly, augmented_ctl)
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
