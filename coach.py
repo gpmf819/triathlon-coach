@@ -308,3 +308,82 @@ Expected NP: ~[NP]W | IF: [IF] | TSS: ~[TSS]
     )
 
     return message.content[0].text
+
+
+def get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly):
+    """Generate a 7-day training plan for the upcoming week."""
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    from utils import get_system_time_block
+    from intervals_client import get_workout_library, get_current_phase_targets, summarize_athlete_profile, get_athlete_profile
+
+    workout_library = get_workout_library()
+    workout_library_text = "\n".join([
+        f"- {w['zone']} | IF {w['median_if']} | NP {w['median_np']}W | TSS {w['median_tss']} | {w['median_duration_min']}min | {w['name']}"
+        for w in workout_library
+    ])
+
+    phase = get_current_phase_targets()
+    tss_min, tss_max = phase['tss_target']
+
+    weeks_to_race = (date(2026, 6, 20) - date.today()).days // 7
+
+    prompt = f"""{get_system_time_block()}
+
+You are an expert triathlon coach. Generate a 7-day training plan for the upcoming week starting next Monday.
+
+## Athlete Context
+- FTP: 291W | Run LTHR: 172 bpm | Swim threshold: 2:00/100m
+- Phase: {phase['phase']} | TSS target: {tss_min}-{tss_max}/week
+- CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
+- CTL target at race: 48 | Gap: {round(48 - intervals_summary['ctl'], 1)} points
+- Weekly structure: 3 bikes, 3 runs, 1 rest day
+- Priority: Bike > Run > Swim
+- Swim only if current date is April or later
+
+## Last week
+- Bike: {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)}
+- Run: {weekly.get('run', {}).get('count', 0)}x {weekly.get('run', {}).get('duration_min', 0)}min TSS {weekly.get('run', {}).get('tss', 0)}
+- Total TSS: {weekly.get('total_tss', 0)}
+
+## Zwift Workout Library (bike sessions only — exact names required)
+{workout_library_text}
+
+## Run Prescription
+- Easy/Z2: 5:50-6:10/km | RPE 3/10
+- Tempo/Z3: 5:05-5:20/km | RPE 6-7/10
+- Max 1 tempo run per week in base phase
+
+## Output Rules
+- Never put two hard sessions back to back
+- Rest day on Friday or Monday
+- Longest bike on Saturday or Sunday
+- Zwift workout names must come from library above exactly — never invent names
+- For unstructured Z2 bike rides use "Free ride Zone 2"
+- Total TSS must fall within {tss_min}-{tss_max}
+- No column alignment — use clear labels instead (WhatsApp uses proportional font)
+
+Respond ONLY in this exact format with no preamble:
+
+*Week of [Mon date] — {phase['phase']} | {weeks_to_race} weeks to Tremblant*
+Target: {tss_min}-{tss_max} TSS | [one-line phase focus]
+
+Mon: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
+Tue: [Sport] — [Type] [duration] (~[TSS] TSS)
+Wed: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
+Thu: [Sport] — [Type] [duration] (~[TSS] TSS)
+Fri: Rest
+Sat: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
+Sun: [Sport] — [Type] [duration] (~[TSS] TSS)
+
+Total: [N] sessions | ~[H:MM] | ~[TSS] TSS
+
+Reply with a change request to adjust e.g. "make Wednesday easier" or "swap Thu and Fri"
+"""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return message.content[0].text

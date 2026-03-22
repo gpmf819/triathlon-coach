@@ -6,6 +6,7 @@ import os
 import json
 import time
 import re
+import threading
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
@@ -20,13 +21,27 @@ app = Flask(__name__)
 # In-memory conversation state per user
 conversations = {}
 
-# Pending workout uploads per user (stored after coach recommends a run)
-pending_uploads = {}
-
-# Post-workout RPE/feel capture state per user
-post_workout_state = {}
-
 FEEL_MAP = {"weak": 1, "poor": 2, "normal": 3, "good": 4, "strong": 5}
+
+WEEKLY_PLAN_TRIGGERS = [
+    "weekly plan", "plan my week", "what's my week",
+    "give me a plan", "plan this week", "week plan",
+    "plan for the week", "my plan",
+]
+
+
+def _ensure_conversation(phone_number):
+    """Initialize conversation state dict if not already present."""
+    if phone_number not in conversations:
+        conversations[phone_number] = {
+            "history": [],
+            "pending_workout": None,
+            "pending_weekly_plan": None,
+            "post_workout_state": None,
+            "post_workout_rpe": None,
+            "post_workout_activity_id": None,
+            "post_workout_activity_type": None,
+        }
 
 # Cache for slow data (refreshed hourly at most)
 _cache = {
@@ -323,10 +338,9 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
 
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-    if phone_number not in conversations:
-        conversations[phone_number] = []
+    _ensure_conversation(phone_number)
 
-    history = conversations[phone_number]
+    history = conversations[phone_number]["history"]
     context_block = build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message)
     history.append({"role": "user", "content": context_block})
 
@@ -342,7 +356,7 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     # Extract and store workout upload block if present
     workout_name, workout_text = extract_workout_upload(full_reply)
     if workout_name and workout_text:
-        pending_uploads[phone_number] = {
+        conversations[phone_number]["pending_workout"] = {
             "name": workout_name,
             "text": workout_text
         }
@@ -354,20 +368,21 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
     history.append({"role": "assistant", "content": full_reply})  # keep full reply in history
 
     if len(history) > 8:
-        conversations[phone_number] = history[-8:]
+        conversations[phone_number]["history"] = history[-8:]
 
     return reply
 
 
 def handle_confirm(phone_number):
     """Upload pending workout to Intervals.icu when athlete confirms."""
-    pending = pending_uploads.get(phone_number)
+    _ensure_conversation(phone_number)
+    pending = conversations[phone_number]["pending_workout"]
     if not pending:
         return "No pending workout to upload. Ask for a run recommendation first."
 
     try:
         result = create_run_workout(pending["name"], pending["text"])
-        del pending_uploads[phone_number]
+        conversations[phone_number]["pending_workout"] = None
         return f"Done — '{result['name']}' uploaded to Intervals.icu ({result['steps']} steps). It will sync to your Garmin within a few minutes."
     except Exception as e:
         print(f"Upload error: {e}")
@@ -404,7 +419,8 @@ def generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data
     # Store pending upload from nightly message
     workout_name, workout_text = extract_workout_upload(full_reply)
     if workout_name and workout_text:
-        pending_uploads[athlete_phone] = {
+        _ensure_conversation(athlete_phone)
+        conversations[athlete_phone]["pending_workout"] = {
             "name": workout_name,
             "text": workout_text
         }
@@ -435,6 +451,9 @@ def whatsapp_webhook():
 
     print(f"Message from {from_number}: {incoming_msg}")
 
+    # Ensure conversation state exists for this number
+    _ensure_conversation(from_number)
+
     # Handle confirm/upload trigger
     if msg_lower in ["confirm", "upload", "yes upload", "upload it"]:
         reply = handle_confirm(from_number)
@@ -444,14 +463,14 @@ def whatsapp_webhook():
         return str(resp)
 
     # Post-workout RPE capture state machine
-    state = post_workout_state.get(from_number, {}).get("state")
+    state = conversations[from_number]["post_workout_state"]
 
     if state == "awaiting_rpe":
         try:
             rpe = int(msg_lower.strip())
             if 1 <= rpe <= 10:
-                post_workout_state[from_number]["rpe"] = rpe
-                post_workout_state[from_number]["state"] = "awaiting_feel"
+                conversations[from_number]["post_workout_rpe"] = rpe
+                conversations[from_number]["post_workout_state"] = "awaiting_feel"
                 reply = "How did your body feel? (weak / poor / normal / good / strong)"
                 resp = MessagingResponse()
                 resp.message(reply)
@@ -466,10 +485,14 @@ def whatsapp_webhook():
         feel_word = msg_lower.strip()
         if feel_word in FEEL_MAP:
             feel_int = FEEL_MAP[feel_word]
-            rpe = post_workout_state[from_number]["rpe"]
-            activity_id = post_workout_state[from_number]["activity_id"]
-            activity_type = post_workout_state[from_number].get("activity_type", "workout")
-            post_workout_state.pop(from_number, None)
+            rpe = conversations[from_number]["post_workout_rpe"]
+            activity_id = conversations[from_number]["post_workout_activity_id"]
+            activity_type = conversations[from_number]["post_workout_activity_type"] or "workout"
+            # Reset post-workout state
+            conversations[from_number]["post_workout_state"] = None
+            conversations[from_number]["post_workout_rpe"] = None
+            conversations[from_number]["post_workout_activity_id"] = None
+            conversations[from_number]["post_workout_activity_type"] = None
 
             try:
                 save_activity_rpe(activity_id, rpe, feel_int)
@@ -510,17 +533,39 @@ def whatsapp_webhook():
             activity = None
 
         if activity:
-            post_workout_state[from_number] = {
-                "state": "awaiting_rpe",
-                "activity_id": activity["id"],
-                "activity_type": activity.get("type", "workout"),
-                "rpe": None,
-            }
+            conversations[from_number]["post_workout_state"] = "awaiting_rpe"
+            conversations[from_number]["post_workout_activity_id"] = activity["id"]
+            conversations[from_number]["post_workout_activity_type"] = activity.get("type", "workout")
+            conversations[from_number]["post_workout_rpe"] = None
             reply = "Nice work! Rate your effort 1-10 (1=very easy, 10=maximal):"
         else:
             reply = "Nice work! No recent activity found in Intervals.icu — make sure it's synced, then try again."
         resp = MessagingResponse()
         resp.message(reply)
+        return str(resp)
+
+    # Weekly plan trigger — run in background to avoid Twilio timeout
+    if any(trigger in msg_lower for trigger in WEEKLY_PLAN_TRIGGERS):
+        resp = MessagingResponse()
+        resp.message("Generating your weekly plan, give me a moment...")
+
+        def send_weekly_plan():
+            try:
+                garmin_summary, intervals_summary, weekly = get_coaching_context()
+                system_prompt, ctl_data = get_cached()
+                from coach import get_weekly_plan
+                plan = get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly)
+                _ensure_conversation(from_number)
+                conversations[from_number]["pending_weekly_plan"] = plan
+                conversations[from_number]["history"].append({"role": "assistant", "content": plan})
+                send_whatsapp_message(from_number, plan)
+            except Exception as e:
+                print(f"Weekly plan error: {e}")
+                send_whatsapp_message(from_number, "Sorry, had trouble generating your plan. Try again.")
+
+        thread = threading.Thread(target=send_weekly_plan)
+        thread.daemon = True
+        thread.start()
         return str(resp)
 
     # Normal coaching flow
@@ -556,7 +601,6 @@ def nightly_push():
         except Exception as e:
             print(f"Nightly push background error: {e}")
 
-    import threading
     thread = threading.Thread(target=send_in_background)
     thread.daemon = True
     thread.start()
