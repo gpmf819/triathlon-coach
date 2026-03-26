@@ -546,6 +546,96 @@ def create_run_workout(name, workout_text, target_date=None):
     }
 
 
+def upload_weekly_plan(sessions):
+    """
+    Upload all planned sessions to Intervals.icu.
+
+    Each session dict must contain at minimum:
+      day, date (YYYY-MM-DD), sport (Bike/Run/Swim/Rest), type, duration_min, tss
+    Optional: zwift_workout (bike), workout_text (run/swim), uploaded, event_id
+
+    Returns a summary dict with keys: uploaded, skipped, errors (each a list of strings).
+    Mutates sessions in place: sets uploaded=True and event_id on success.
+    """
+    cfg = get_headers()
+    results = {"uploaded": [], "skipped": [], "errors": []}
+
+    for session in sessions:
+        sport = session.get("sport", "")
+        day = session.get("day", "")
+        date_str = session.get("date", "")
+
+        if sport == "Rest" or session.get("uploaded", False):
+            results["skipped"].append(f"{day}: Rest — skipped")
+            continue
+
+        try:
+            start_date = f"{date_str}T00:00:00"
+
+            if sport == "Bike":
+                name = session.get("zwift_workout") or "Z2 Ride"
+                payload = {
+                    "name": name,
+                    "type": "Ride",
+                    "category": "WORKOUT",
+                    "start_date_local": start_date,
+                    "description": session.get("zwift_workout", ""),
+                }
+                r = requests.post(
+                    f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/events",
+                    headers={**cfg["headers"], "Content-Type": "application/json"},
+                    json=payload,
+                )
+                r.raise_for_status()
+                result = r.json()
+                session["uploaded"] = True
+                session["event_id"] = result.get("id")
+                label = session.get("type", "Bike")
+                results["uploaded"].append(f"{day}: {label} Bike — uploaded")
+
+            elif sport == "Run":
+                workout_name = session.get("name") or f"{session.get('type', 'Easy')} Run"
+                workout_text = session.get("workout_text") or ""
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                result = create_run_workout(workout_name, workout_text, target_date)
+                session["uploaded"] = True
+                session["event_id"] = result.get("event_id")
+                label = session.get("type", "Easy")
+                results["uploaded"].append(f"{day}: {label} Run — uploaded")
+
+            elif sport == "Swim":
+                swim_desc = session.get("workout_text") or (
+                    "Warmup\n- 200m easy\n\n"
+                    "Main set\n- 6x100m @2:10/100m, 20s rest\n- Focus: technique, relaxed stroke\n\n"
+                    "Cooldown\n- 200m easy"
+                )
+                payload = {
+                    "name": "Swim — Z2 Aerobic",
+                    "type": "Swim",
+                    "category": "WORKOUT",
+                    "start_date_local": start_date,
+                    "description": swim_desc,
+                }
+                r = requests.post(
+                    f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/events",
+                    headers={**cfg["headers"], "Content-Type": "application/json"},
+                    json=payload,
+                )
+                r.raise_for_status()
+                result = r.json()
+                session["uploaded"] = True
+                session["event_id"] = result.get("id")
+                results["uploaded"].append(f"{day}: Swim — uploaded")
+
+            else:
+                results["skipped"].append(f"{day}: {sport} — skipped (unknown sport)")
+
+        except Exception as e:
+            results["errors"].append(f"{day}: {sport} — error: {str(e)}")
+
+    return results
+
+
 def _icu_cfg():
     """Auth config for Intervals.icu API calls."""
     import base64

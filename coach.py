@@ -310,12 +310,91 @@ Expected NP: ~[NP]W | IF: [IF] | TSS: ~[TSS]
     return message.content[0].text
 
 
+def generate_swim_workout(duration_min, phase_name):
+    """Generate swim workout in Intervals.icu plain text format.
+    CSS threshold pace: 2:00/100m. Easy: 2:15-2:20/100m."""
+    if phase_name in ["Base 1", "Base 2", "Late Base"]:
+        return """Warmup
+- 200m easy 2:20/100m
+
+Drills
+- 4x50m drill (catch-up or fingertip drag), 15s rest
+
+Main set
+- 8x100m @2:10/100m, 20s rest
+- Focus: consistent splits, relaxed stroke
+
+Cooldown
+- 200m easy choice stroke"""
+    elif phase_name in ["Build 1", "Build 2"]:
+        return """Warmup
+- 300m easy 2:20/100m
+
+Main set
+- 4x200m @2:05/100m, 30s rest
+- 4x50m fast @1:55/100m, 20s rest
+
+Cooldown
+- 200m easy"""
+    else:
+        # Peak / Taper
+        return """Warmup
+- 200m easy
+
+Main set
+- 3x300m @2:00/100m (race pace), 45s rest
+
+Cooldown
+- 100m easy"""
+
+
+def generate_run_workout_text(run_type):
+    """Generate run workout in Intervals.icu plain text format based on type."""
+    t = run_type.lower()
+    if "tempo" in t:
+        return """Warmup easy RPE3
+- 10m 6:10/km
+
+Tempo RPE6-7 HR154-162
+- 3x 10m 5:05-5:20/km
+- 3m 6:10/km recovery between
+
+Cooldown RPE2
+- 10m 6:30/km"""
+    elif "long" in t:
+        return """Warmup easy RPE3
+- 10m 6:10/km
+
+Long Z2 RPE3
+- 60m 5:50-6:10/km, fully conversational
+- HR confirms 145-153 after warmup
+
+Cooldown RPE2
+- 5m walk or very easy"""
+    else:
+        # Easy / Z2 default
+        return """Warmup easy RPE3
+- 10m 6:10/km
+
+Easy Z2 RPE3
+- 30m 5:50-6:10/km, fully conversational
+- HR confirms 145-153 after 2min
+
+Cooldown RPE2
+- 5m 6:30/km"""
+
+
 def get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly):
-    """Generate a 7-day training plan for the upcoming week."""
+    """Generate a 7-day training plan for the upcoming week.
+
+    Returns the full Claude response text which contains:
+    - Display plan (sent to athlete)
+    - [PLAN_JSON]...[/PLAN_JSON] block (parsed separately, stripped before sending)
+    """
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     from utils import get_system_time_block
-    from intervals_client import get_workout_library, get_current_phase_targets, summarize_athlete_profile, get_athlete_profile
+    from intervals_client import get_workout_library, get_current_phase_targets
 
     workout_library = get_workout_library()
     workout_library_text = "\n".join([
@@ -325,21 +404,21 @@ def get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly):
 
     phase = get_current_phase_targets()
     tss_min, tss_max = phase['tss_target']
-
     weeks_to_race = (date(2026, 6, 20) - date.today()).days // 7
 
     prompt = f"""{get_system_time_block()}
 
-You are an expert triathlon coach. Generate a 7-day training plan for the upcoming week starting next Monday.
+You are an expert triathlon coach. Generate a 7-day training plan for the upcoming week.
+The week starts on weekly_plan_starts as specified in [SYSTEM_TIME] above.
+Use that exact Monday date for all session dates.
 
 ## Athlete Context
 - FTP: 291W | Run LTHR: 172 bpm | Swim threshold: 2:00/100m
 - Phase: {phase['phase']} | TSS target: {tss_min}-{tss_max}/week
 - CTL: {intervals_summary['ctl']} | ATL: {intervals_summary['atl']} | TSB: {intervals_summary['tsb']}
 - CTL target at race: 48 | Gap: {round(48 - intervals_summary['ctl'], 1)} points
-- Weekly structure: 3 bikes, 3 runs, 1 rest day
+- Weekly structure: 3 bikes (2 structured + 1 Z2), 2 runs (1 easy + 1 tempo), 1 swim (Z2 aerobic), 1 rest day
 - Priority: Bike > Run > Swim
-- Swim only if current date is April or later
 
 ## Last week
 - Bike: {weekly.get('bike', {}).get('count', 0)}x {weekly.get('bike', {}).get('duration_min', 0)}min TSS {weekly.get('bike', {}).get('tss', 0)}
@@ -356,20 +435,21 @@ You are an expert triathlon coach. Generate a 7-day training plan for the upcomi
 
 ## Output Rules
 - Never put two hard sessions back to back
-- Rest day on Friday or Monday
+- Rest day on Friday or Monday preferred
 - Longest bike on Saturday or Sunday
 - Zwift workout names must come from library above exactly — never invent names
 - For unstructured Z2 bike rides use "Free ride Zone 2"
 - Total TSS must fall within {tss_min}-{tss_max}
-- No column alignment — use clear labels instead (WhatsApp uses proportional font)
+- No column alignment — use clear labels (WhatsApp proportional font)
+- Always include exactly 1 swim session per week
 
-Respond ONLY in this exact format with no preamble:
+Respond in this exact format:
 
 *Week of [Mon date] — {phase['phase']} | {weeks_to_race} weeks to Tremblant*
 Target: {tss_min}-{tss_max} TSS | [one-line phase focus]
 
 Mon: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
-Tue: [Sport] — [Type] [duration] (~[TSS] TSS)
+Tue: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
 Wed: [Sport] — [Type] [duration] (~[TSS] TSS)[Zwift name if bike]
 Thu: [Sport] — [Type] [duration] (~[TSS] TSS)
 Fri: Rest
@@ -379,11 +459,33 @@ Sun: [Sport] — [Type] [duration] (~[TSS] TSS)
 Total: [N] sessions | ~[H:MM] | ~[TSS] TSS
 
 Reply with a change request to adjust e.g. "make Wednesday easier" or "swap Thu and Fri"
+Reply "confirm plan" to upload all sessions to Intervals.icu and sync to Garmin
+
+Then append this machine-readable block — it is stripped before the athlete sees the message:
+
+[PLAN_JSON]
+{{"week_start": "YYYY-MM-DD", "sessions": [
+  {{"day": "Monday", "date": "YYYY-MM-DD", "sport": "Bike", "type": "Tempo", "duration_min": 60, "tss": 67, "zwift_workout": "exact name from library or Free ride Zone 2"}},
+  {{"day": "Tuesday", "date": "YYYY-MM-DD", "sport": "Run", "type": "Easy", "duration_min": 45, "tss": 35}},
+  {{"day": "Wednesday", "date": "YYYY-MM-DD", "sport": "Bike", "type": "Z2", "duration_min": 90, "tss": 58, "zwift_workout": "exact name"}},
+  {{"day": "Thursday", "date": "YYYY-MM-DD", "sport": "Swim", "type": "Z2 Aerobic", "duration_min": 45, "tss": 30}},
+  {{"day": "Friday", "date": "YYYY-MM-DD", "sport": "Rest", "type": "Rest", "duration_min": 0, "tss": 0}},
+  {{"day": "Saturday", "date": "YYYY-MM-DD", "sport": "Bike", "type": "Z2 Long", "duration_min": 120, "tss": 80, "zwift_workout": "exact name"}},
+  {{"day": "Sunday", "date": "YYYY-MM-DD", "sport": "Run", "type": "Tempo", "duration_min": 50, "tss": 55}}
+], "total_tss": 325}}
+[/PLAN_JSON]
+
+Rules for the JSON block:
+- Use the exact Monday date from weekly_plan_starts for "week_start" and increment by 1 day per session
+- sport must be exactly "Bike", "Run", "Swim", or "Rest"
+- zwift_workout must be the exact Zwift library name for Bike sessions (or "Free ride Zone 2")
+- Do not include zwift_workout for Run, Swim, or Rest sessions
+- Output valid JSON only — no trailing commas
 """
 
     message = client.messages.create(
         model="claude-sonnet-4-5",
-        max_tokens=600,
+        max_tokens=1200,
         messages=[{"role": "user", "content": prompt}]
     )
     return message.content[0].text

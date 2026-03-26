@@ -10,8 +10,8 @@ import threading
 from datetime import date, timedelta
 from dotenv import load_dotenv
 from garmin_client import get_readiness_data
-from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report, format_weekly_summary, get_current_phase_targets, PHASE_DESCRIPTIONS, CTL_RACE_TARGET
-from coach import summarize_garmin, summarize_intervals
+from intervals_client import get_fitness_data, get_workout_library, get_ctl_trajectory, get_weekly_summary, create_run_workout, upload_weekly_plan, get_most_recent_activity, save_activity_rpe, get_recent_rpe_data, format_ctl_report, format_weekly_summary, get_current_phase_targets, PHASE_DESCRIPTIONS, CTL_RACE_TARGET
+from coach import summarize_garmin, summarize_intervals, generate_swim_workout, generate_run_workout_text
 from utils import get_system_time_block
 
 load_dotenv()
@@ -27,6 +27,12 @@ WEEKLY_PLAN_TRIGGERS = [
     "weekly plan", "plan my week", "what's my week",
     "give me a plan", "plan this week", "week plan",
     "plan for the week", "my plan",
+]
+
+PLAN_UPLOAD_TRIGGERS = [
+    "confirm plan", "upload plan", "push plan",
+    "confirm the plan", "upload the plan", "push the plan",
+    "yes upload plan", "upload it all",
 ]
 
 
@@ -174,12 +180,15 @@ Main set 3x
 - 8m 5:05-5:20/km, RPE 6-7/10. HR confirms 154-162 after 90s
 - 3m 6:10/km, RPE 3/10 recovery
 
-## Date and Time Rules
-- The [SYSTEM_TIME] block in the most recent user message is always the authoritative date/time
-- workout_recommendation_target_date is the ONLY date to use for workout recommendations
-- Always recommend workouts for workout_recommendation_target_date — never for any other date
-- Dates in earlier conversation history may be stale — always defer to the most recent [SYSTEM_TIME] block
-- Never infer or calculate dates yourself — use only what is provided in [SYSTEM_TIME]
+## Date and Time Rules (CRITICAL — read before every response)
+- The [SYSTEM_TIME] block contains the actual current time fetched at the moment you received this message
+- unix_timestamp confirms this is a fresh real-time reading — not cached or estimated
+- today_name and today_date are FACTS — never contradict them
+- workout_recommendation_is_for is the ONLY date to use for single workout recommendations
+- weekly_plan_starts is the ONLY Monday date to use when generating a weekly plan
+- Dates in earlier conversation history are from previous messages and may be days old — ALWAYS defer to the current [SYSTEM_TIME] block
+- Never calculate or infer dates yourself — use only what [SYSTEM_TIME] provides
+- If you are unsure what day it is, re-read [SYSTEM_TIME] — the answer is there
 
 ## Your Coaching Style
 - Conversational but precise — like a coach texting an athlete
@@ -260,6 +269,23 @@ def extract_workout_upload(text):
 def strip_workout_upload_block(text):
     """Remove the [WORKOUT_UPLOAD] block from coach response before sending to athlete."""
     return re.sub(r'\[WORKOUT_UPLOAD\].*?\[/WORKOUT_UPLOAD\]', '', text, flags=re.DOTALL).strip()
+
+
+def extract_plan_json(text):
+    """Extract and parse the [PLAN_JSON] block from Claude's weekly plan response."""
+    match = re.search(r'\[PLAN_JSON\](.*?)\[/PLAN_JSON\]', text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1).strip())
+    except Exception as e:
+        print(f"Failed to parse PLAN_JSON: {e}")
+        return None
+
+
+def strip_plan_json_block(text):
+    """Remove the [PLAN_JSON] block from weekly plan before sending to athlete."""
+    return re.sub(r'\[PLAN_JSON\].*?\[/PLAN_JSON\]', '', text, flags=re.DOTALL).strip()
 
 
 def _format_rpe_block(rpe_data):
@@ -362,8 +388,16 @@ def chat_with_coach(user_message, phone_number, garmin_summary, intervals_summar
         }
         print(f"Stored pending upload for {phone_number}: {workout_name}")
 
-    # Strip upload block before sending to athlete
+    # Extract and update weekly plan if a [PLAN_JSON] block is present (plan modification)
+    plan_data = extract_plan_json(full_reply)
+    if plan_data:
+        plan_data["confirmed"] = False
+        conversations[phone_number]["pending_weekly_plan"] = plan_data
+        print(f"Updated weekly plan from conversation: {len(plan_data.get('sessions', []))} sessions")
+
+    # Strip hidden blocks before sending to athlete
     reply = strip_workout_upload_block(full_reply)
+    reply = strip_plan_json_block(reply)
 
     history.append({"role": "assistant", "content": full_reply})  # keep full reply in history
 
@@ -387,6 +421,45 @@ def handle_confirm(phone_number):
     except Exception as e:
         print(f"Upload error: {e}")
         return f"Upload failed: {str(e)}. Try again or check Intervals.icu manually."
+
+
+def handle_plan_upload(phone_number):
+    """Upload all sessions in pending_weekly_plan to Intervals.icu."""
+    _ensure_conversation(phone_number)
+    plan = conversations[phone_number].get("pending_weekly_plan")
+    if not plan or not isinstance(plan, dict):
+        return "No confirmed plan to upload. Send 'weekly plan' first, then 'confirm plan' to upload."
+
+    sessions = plan.get("sessions", [])
+    if not sessions:
+        return "Plan has no sessions. Send 'weekly plan' to generate a new one."
+
+    # Enrich sessions with workout text before uploading
+    phase_name = get_current_phase_targets().get("phase", "Base 1")
+    for session in sessions:
+        sport = session.get("sport", "")
+        if sport == "Run" and not session.get("workout_text"):
+            session["workout_text"] = generate_run_workout_text(session.get("type", "Easy"))
+            session["name"] = f"{session.get('type', 'Easy')} Run"
+        elif sport == "Swim" and not session.get("workout_text"):
+            session["workout_text"] = generate_swim_workout(session.get("duration_min", 45), phase_name)
+
+    results = upload_weekly_plan(sessions)
+
+    # Build confirmation message
+    lines = ["Weekly plan uploaded to Intervals.icu:\n"]
+    for msg in results["uploaded"]:
+        lines.append(msg)
+    for msg in results["skipped"]:
+        lines.append(msg)
+    for msg in results["errors"]:
+        lines.append(f"ERROR: {msg}")
+
+    lines.append("\nAll sessions will sync to your Garmin overnight.")
+    lines.append("Reply 'weekly plan' next Sunday for next week's plan.")
+
+    plan["confirmed"] = True
+    return "\n".join(lines)
 
 
 def send_whatsapp_message(to, body):
@@ -454,7 +527,15 @@ def whatsapp_webhook():
     # Ensure conversation state exists for this number
     _ensure_conversation(from_number)
 
-    # Handle confirm/upload trigger
+    # Handle plan upload trigger
+    if any(trigger in msg_lower for trigger in PLAN_UPLOAD_TRIGGERS):
+        reply = handle_plan_upload(from_number)
+        print(f"Plan upload reply: {reply}")
+        resp = MessagingResponse()
+        resp.message(reply)
+        return str(resp)
+
+    # Handle confirm/upload trigger (single workout)
     if msg_lower in ["confirm", "upload", "yes upload", "upload it"]:
         reply = handle_confirm(from_number)
         print(f"Upload reply: {reply}")
@@ -554,11 +635,22 @@ def whatsapp_webhook():
                 garmin_summary, intervals_summary, weekly = get_coaching_context()
                 system_prompt, ctl_data = get_cached()
                 from coach import get_weekly_plan
-                plan = get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly)
+                full_response = get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly)
                 _ensure_conversation(from_number)
-                conversations[from_number]["pending_weekly_plan"] = plan
-                conversations[from_number]["history"].append({"role": "assistant", "content": plan})
-                send_whatsapp_message(from_number, plan)
+
+                # Parse structured plan from JSON block
+                plan_data = extract_plan_json(full_response)
+                if plan_data:
+                    plan_data["confirmed"] = False
+                    conversations[from_number]["pending_weekly_plan"] = plan_data
+                    print(f"Stored structured weekly plan: {len(plan_data.get('sessions', []))} sessions")
+                else:
+                    print("Warning: no [PLAN_JSON] block found in weekly plan response")
+
+                # Strip JSON block before storing in history and sending to athlete
+                display_plan = strip_plan_json_block(full_response)
+                conversations[from_number]["history"].append({"role": "assistant", "content": display_plan})
+                send_whatsapp_message(from_number, display_plan)
             except Exception as e:
                 print(f"Weekly plan error: {e}")
                 send_whatsapp_message(from_number, "Sorry, had trouble generating your plan. Try again.")
