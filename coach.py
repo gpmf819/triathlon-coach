@@ -168,9 +168,9 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 
     prompt = f"""{get_system_time_block()}
 
-You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
+You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend today's training session.
 
-Your workout recommendation is for workout_recommendation_target_date as specified in [SYSTEM_TIME] above.
+Your workout recommendation is for workout_recommendation_is_for as specified in [SYSTEM_TIME] above.
 
 ## Athlete Profile
 - Name: {athlete_profile['name']}, Age: 44, Male, 75kg

@@ -58,6 +58,6 @@ time_of_day: {time_of_day}
 current_week: {week_start.isoformat()} to {week_end.isoformat()}
 next_monday: {next_monday.isoformat()}
 days_remaining_in_week: {days_remaining_in_week}
-workout_recommendation_is_for: {tomorrow_name} {tomorrow.strftime('%B %d %Y')}
+workout_recommendation_is_for: {today_name} {today.strftime('%B %d %Y')}
 weekly_plan_starts: {next_monday.strftime('%A %B %d %Y')}
 [/SYSTEM_TIME]"""

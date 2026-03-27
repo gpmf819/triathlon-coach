@@ -184,7 +184,7 @@ Main set 3x
 - The [SYSTEM_TIME] block contains the actual current time fetched at the moment you received this message
 - unix_timestamp confirms this is a fresh real-time reading — not cached or estimated
 - today_name and today_date are FACTS — never contradict them
-- workout_recommendation_is_for is the ONLY date to use for single workout recommendations
+- workout_recommendation_is_for is the ONLY date to use for single workout recommendations when the athlete asks during the day
 - weekly_plan_starts is the ONLY Monday date to use when generating a weekly plan
 - Dates in earlier conversation history are from previous messages and may be days old — ALWAYS defer to the current [SYSTEM_TIME] block
 - Never calculate or infer dates yourself — use only what [SYSTEM_TIME] provides
@@ -303,6 +303,8 @@ def _format_rpe_block(rpe_data):
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
     """Build the live data context block."""
     today_date = date.today()
+    day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    tomorrow_name = day_names[(today_date + timedelta(days=1)).weekday()]
 
     # Remaining days in the week (Sun=6, so days left after today = 6 - weekday())
     days_remaining = 6 - today_date.weekday()
@@ -341,7 +343,7 @@ Recent activities: {json.dumps(intervals_summary['recent_activities'], default=s
     if user_message:
         block += f"\n[ATHLETE MESSAGE]\n{user_message}\n"
     else:
-        block += "\n[TASK]\nGenerate tomorrow's workout recommendation as a proactive nightly WhatsApp message. Be concise — opening line with phase/countdown, workout with pace+RPE for runs or power zones for bike, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. For runs include [WORKOUT_UPLOAD] block. End with: 'Reply confirm to upload to Garmin or reply to adjust'\n"
+        block += f"\n[TASK]\nGenerate the workout recommendation for TOMORROW ({tomorrow_name}) as a proactive nightly WhatsApp message. Note: workout_recommendation_is_for shows today — this nightly task is the exception and targets tomorrow ({tomorrow_name}) instead. Be concise — opening line with phase/countdown, workout with pace+RPE for runs or power zones for bike, Zwift workout name if bike (from library only), one sentence rationale. Under 250 words. For runs include [WORKOUT_UPLOAD] block. End with: 'Reply confirm to upload to Garmin or reply to adjust'\n"
 
     return block
 
