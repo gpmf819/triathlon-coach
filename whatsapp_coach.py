@@ -118,10 +118,33 @@ def get_cached():
 
 
 def build_system_prompt(workout_library_text):
-    weeks_to_race = (RACE_DATE - date.today()).days // 7
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    _today = _dt.now(ZoneInfo('America/Montreal')).date()
+    weeks_to_race = (RACE_DATE - _today).days // 7
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
-    return f"""You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
+    return f"""## CRITICAL: Date and Time Rules
+
+You MUST follow these rules on every single response without exception:
+
+1. The [SYSTEM_TIME] block is injected at the exact moment the athlete sent this message. It contains the real current time — not estimated, not cached.
+
+2. TODAY IS the value of "TODAY IS:" in [SYSTEM_TIME]. Never contradict this.
+
+3. TOMORROW IS the value of "TOMORROW IS:" in [SYSTEM_TIME]. Never contradict this.
+
+4. When recommending a workout, ALWAYS use exactly: "WORKOUT RECOMMENDATION MUST BE FOR:" from [SYSTEM_TIME]. Copy this string verbatim into your response.
+
+5. When generating a weekly plan, start from exactly: "WEEKLY PLAN STARTS ON:" from [SYSTEM_TIME]. Copy this string verbatim.
+
+6. Never calculate, infer, or derive dates yourself. Never add or subtract days. Never guess what day comes after another. All date arithmetic has already been done for you in [SYSTEM_TIME] — just read and copy the finished strings.
+
+7. Earlier messages in this conversation contain [SYSTEM_TIME] blocks from previous requests. Those timestamps are from past moments. ALWAYS use the [SYSTEM_TIME] block from the most recent message — it has the highest unix_timestamp value.
+
+---
+
+You are Coach Claude, an expert triathlon coach for Gaël, an experienced triathlete training for Tremblant 5150 (Olympic distance) on June 20, 2026.
 
 ## Athlete Profile
 - Age: 44, Male, 75kg, Montreal-based
@@ -180,15 +203,8 @@ Main set 3x
 - 8m 5:05-5:20/km, RPE 6-7/10. HR confirms 154-162 after 90s
 - 3m 6:10/km, RPE 3/10 recovery
 
-## Date and Time Rules (CRITICAL — read before every response)
-- The [SYSTEM_TIME] block contains the actual current time fetched at the moment you received this message
-- unix_timestamp confirms this is a fresh real-time reading — not cached or estimated
-- today_name and today_date are FACTS — never contradict them
-- workout_recommendation_is_for is the ONLY date to use for single workout recommendations when the athlete asks during the day
-- weekly_plan_starts is the ONLY Monday date to use when generating a weekly plan
-- Dates in earlier conversation history are from previous messages and may be days old — ALWAYS defer to the current [SYSTEM_TIME] block
-- Never calculate or infer dates yourself — use only what [SYSTEM_TIME] provides
-- If you are unsure what day it is, re-read [SYSTEM_TIME] — the answer is there
+## Date and Time
+See the CRITICAL rules at the top of this prompt. Always use "WORKOUT RECOMMENDATION MUST BE FOR:" from [SYSTEM_TIME] verbatim. Never derive or calculate dates.
 
 ## Your Coaching Style
 - Conversational but precise — like a coach texting an athlete
@@ -302,9 +318,16 @@ def _format_rpe_block(rpe_data):
 
 def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, user_message=None):
     """Build the live data context block."""
-    today_date = date.today()
+    # Always use Montreal time — date.today() returns UTC on Railway and would
+    # disagree with get_system_time_block() around midnight ET
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    _et = ZoneInfo('America/Montreal')
+    today_date = _dt.now(_et).date()
+    tomorrow_date = today_date + timedelta(days=1)
+
     day_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    tomorrow_name = day_names[(today_date + timedelta(days=1)).weekday()]
+    tomorrow_name = day_names[tomorrow_date.weekday()]
 
     # Remaining days in the week (Sun=6, so days left after today = 6 - weekday())
     days_remaining = 6 - today_date.weekday()
@@ -705,6 +728,11 @@ def nightly_push():
 @app.route("/health", methods=["GET"])
 def health():
     return "Coach is alive!", 200
+
+
+@app.route("/debug-time", methods=["GET"])
+def debug_time():
+    return get_system_time_block().replace("\n", "<br>"), 200
 
 
 # Pre-warm cache at startup

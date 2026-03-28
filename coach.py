@@ -120,10 +120,13 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     athlete_metrics = summarize_athlete_profile(raw_profile)
     intervals_summary = summarize_intervals(intervals_data)
 
-    # Dynamic race countdown
+    # Dynamic race countdown — use Montreal time to stay consistent with [SYSTEM_TIME]
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    _today = _dt.now(ZoneInfo('America/Montreal')).date()
     race_date = date(2026, 6, 20)
-    weeks_to_race = (race_date - date.today()).days // 7
-    days_to_race = (race_date - date.today()).days
+    weeks_to_race = (race_date - _today).days // 7
+    days_to_race = (race_date - _today).days
     weeks_remaining_for_ctl = max(weeks_to_race - 2, 1)
 
     # Dynamic training phase
@@ -168,9 +171,9 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
 
     prompt = f"""{get_system_time_block()}
 
-You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend today's training session.
+You are an expert triathlon coach preparing an athlete for a specific A-race. Based on the athlete's readiness data and recent training load, recommend tomorrow's training session.
 
-Your workout recommendation is for workout_recommendation_is_for as specified in [SYSTEM_TIME] above.
+Your workout recommendation must be for the date in "WORKOUT RECOMMENDATION MUST BE FOR:" in [SYSTEM_TIME] above. Copy that date string verbatim.
 
 ## Athlete Profile
 - Name: {athlete_profile['name']}, Age: 44, Male, 75kg
@@ -404,7 +407,9 @@ def get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly):
 
     phase = get_current_phase_targets()
     tss_min, tss_max = phase['tss_target']
-    weeks_to_race = (date(2026, 6, 20) - date.today()).days // 7
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    weeks_to_race = (date(2026, 6, 20) - _dt.now(ZoneInfo('America/Montreal')).date()).days // 7
 
     prompt = f"""{get_system_time_block()}
 
