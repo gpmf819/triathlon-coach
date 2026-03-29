@@ -35,6 +35,9 @@ PLAN_UPLOAD_TRIGGERS = [
     "yes upload plan", "upload it all",
 ]
 
+# Sent by athlete when they want to overwrite an existing weekly plan
+OVERWRITE_PLAN_TRIGGERS = ["overwrite", "overwrite plan", "yes overwrite", "replace plan"]
+
 
 def _ensure_conversation(phone_number):
     """Initialize conversation state dict if not already present."""
@@ -47,6 +50,9 @@ def _ensure_conversation(phone_number):
             "post_workout_rpe": None,
             "post_workout_activity_id": None,
             "post_workout_activity_type": None,
+            # Coach 2.0 daily preview state
+            "daily_preview": None,        # tomorrow's workout stored at 8pm
+            "pending_modification": None, # proposed change waiting for YES/NO
         }
 
 # Cache for slow data (refreshed hourly at most)
@@ -552,6 +558,24 @@ def whatsapp_webhook():
     # Ensure conversation state exists for this number
     _ensure_conversation(from_number)
 
+    # ── Coach 2.0: daily preview reply loop ──────────────────────────────────
+    # Route through the modify loop if:
+    #   (a) there is a pending modification waiting for YES/NO, OR
+    #   (b) the 8pm briefing was sent tonight (daily_preview is set)
+    # Plain "confirm" / "✓" shortcuts are caught here before falling through.
+    _preview_active = (
+        conversations[from_number].get("pending_modification") is not None
+        or conversations[from_number].get("daily_preview") is not None
+    )
+    if _preview_active:
+        from daily_preview import handle_preview_reply
+        reply = handle_preview_reply(incoming_msg, from_number, conversations)
+        print(f"Preview reply: {reply[:80]}")
+        resp = MessagingResponse()
+        resp.message(reply)
+        return str(resp)
+    # ── end preview loop ──────────────────────────────────────────────────────
+
     # Handle plan upload trigger
     if any(trigger in msg_lower for trigger in PLAN_UPLOAD_TRIGGERS):
         reply = handle_plan_upload(from_number)
@@ -650,6 +674,24 @@ def whatsapp_webhook():
         resp.message(reply)
         return str(resp)
 
+    # OVERWRITE trigger — athlete said "overwrite" after being told a plan already exists
+    if any(trigger in msg_lower for trigger in OVERWRITE_PLAN_TRIGGERS):
+        resp = MessagingResponse()
+        resp.message("Overwriting the existing plan — give me a moment...")
+
+        def overwrite_plan():
+            try:
+                from weekly_planner import generate_weekly_plan
+                result = generate_weekly_plan(overwrite_if_exists=True)
+                if not result["success"]:
+                    send_whatsapp_message(from_number, f"Plan generation failed: {result['message']}")
+            except Exception as e:
+                send_whatsapp_message(from_number, f"Something went wrong: {e}")
+
+        t = threading.Thread(target=overwrite_plan, daemon=True)
+        t.start()
+        return str(resp)
+
     # Weekly plan trigger — run in background to avoid Twilio timeout
     if any(trigger in msg_lower for trigger in WEEKLY_PLAN_TRIGGERS):
         resp = MessagingResponse()
@@ -704,25 +746,99 @@ def whatsapp_webhook():
 
 @app.route("/nightly", methods=["GET", "POST"])
 def nightly_push():
-    """Called by cron at 8pm ET to send tomorrow's workout."""
-    print("Nightly push triggered...")
+    """
+    Called by Railway cron at 8pm ET.
+    Coach 2.0: delegates to daily_preview.run_daily_preview().
+    """
+    print("Nightly push triggered (Coach 2.0 daily preview)...")
 
     def send_in_background():
+        from daily_preview import run_daily_preview
+        athlete_phone = os.getenv("ATHLETE_PHONE")
         try:
-            garmin_summary, intervals_summary, weekly = get_coaching_context()
-            system_prompt, ctl_data = get_cached()
-            message = generate_nightly_message(garmin_summary, intervals_summary, weekly, ctl_data, system_prompt)
-            athlete_phone = os.getenv("ATHLETE_PHONE")
+            _ensure_conversation(athlete_phone)
+            message = run_daily_preview(conversations, athlete_phone)
             send_whatsapp_message(athlete_phone, message)
-            print(f"Nightly push sent to {athlete_phone}")
+            print(f"Daily preview sent to {athlete_phone}")
         except Exception as e:
-            print(f"Nightly push background error: {e}")
+            print(f"Daily preview error: {e}")
+            # Send a plain fallback so the athlete knows something went wrong
+            try:
+                send_whatsapp_message(
+                    athlete_phone,
+                    "Evening — couldn't load your workout data tonight. "
+                    "Check Intervals.icu for tomorrow's session."
+                )
+            except Exception:
+                pass
 
-    thread = threading.Thread(target=send_in_background)
-    thread.daemon = True
+    thread = threading.Thread(target=send_in_background, daemon=True)
     thread.start()
-
     return "Nightly push started", 200
+
+
+@app.route("/weekly-plan", methods=["GET", "POST"])
+def weekly_plan_route():
+    """
+    Triggered by Railway cron every Sunday at 8:00 am ET.
+    Also callable manually from the Railway dashboard.
+
+    Query param:  ?overwrite=true  — replace an existing plan for the week.
+    Query param:  ?retry=true      — suppresses the retry-alert (used by retry logic).
+
+    Retry logic:
+      If the job fails, a second attempt is made after 30 minutes via the
+      /weekly-plan-retry route. If that also fails, a WhatsApp alert is sent.
+    """
+    from weekly_planner import generate_weekly_plan, _send_failure_alert
+
+    overwrite = request.args.get("overwrite", "false").lower() == "true"
+    is_retry  = request.args.get("retry", "false").lower() == "true"
+
+    def run_in_background():
+        try:
+            result = generate_weekly_plan(overwrite_if_exists=overwrite)
+
+            if not result["success"]:
+                msg = result["message"]
+
+                # If a plan already exists, alert the athlete and stop
+                if result.get("existing"):
+                    athlete_phone = os.getenv("ATHLETE_PHONE")
+                    existing_names = ", ".join(result["existing"][:2])
+                    send_whatsapp_message(
+                        athlete_phone,
+                        f"A plan already exists for next week ({existing_names}).\n"
+                        "Reply OVERWRITE to replace it, or ignore to keep what's there."
+                    )
+                    return
+
+                # Other failures — schedule a retry if this isn't already a retry
+                if not is_retry:
+                    print(f"Weekly plan failed, scheduling 30-min retry. Reason: {msg}")
+                    import threading, time
+                    def delayed_retry():
+                        time.sleep(30 * 60)  # 30 minutes
+                        try:
+                            retry_result = generate_weekly_plan(overwrite_if_exists=False)
+                            if not retry_result["success"]:
+                                _send_failure_alert(retry_result["message"])
+                        except Exception as e:
+                            _send_failure_alert(str(e))
+                    t = threading.Thread(target=delayed_retry, daemon=True)
+                    t.start()
+                else:
+                    # This was already the retry — alert the athlete
+                    _send_failure_alert(msg)
+
+        except Exception as e:
+            print(f"Weekly plan route error: {e}")
+            if is_retry:
+                _send_failure_alert(str(e))
+
+    thread = threading.Thread(target=run_in_background, daemon=True)
+    thread.start()
+    return "Weekly plan generation started", 200
 
 
 @app.route("/health", methods=["GET"])

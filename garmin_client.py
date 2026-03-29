@@ -1,7 +1,11 @@
 import garth
 import os
-from datetime import date, timedelta
+from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+
+# Railway servers run UTC — always derive "today" from Montreal time
+_MONTREAL = ZoneInfo("America/Montreal")
 
 load_dotenv()
 
@@ -24,7 +28,7 @@ def authenticate():
 
 def get_readiness_data(days_back=1):
     client = authenticate()
-    target = date.today() - timedelta(days=days_back)
+    target = datetime.now(_MONTREAL).date() - timedelta(days=days_back)
     date_str = target.isoformat()
     username = client.username
     print(f"Fetching readiness data for {date_str} (user: {username})")

@@ -48,18 +48,6 @@ def get_current_phase_targets():
 
 
 def get_headers():
-    api_key = os.getenv("INTERVALS_API_KEY")
-    athlete_id = os.getenv("INTERVALS_ATHLETE_ID")
-    return {
-        "base_url": "https://intervals.icu/api/v1",
-        "athlete_id": athlete_id,
-        "headers": {
-            "Authorization": f"Basic {requests.auth._basic_auth_str('API_KEY', api_key).split(' ')[1]}"
-        }
-    }
-
-
-def get_headers():
     import base64
     api_key = os.getenv("INTERVALS_API_KEY")
     athlete_id = os.getenv("INTERVALS_ATHLETE_ID")
