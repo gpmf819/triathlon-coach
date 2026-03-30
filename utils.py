@@ -1,6 +1,15 @@
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 import time as time_module
+
+
+def _get_tz():
+    """Return Eastern timezone, with fallback to UTC if tzdata unavailable."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo('America/Toronto')
+    except Exception:
+        import datetime as _dt
+        return _dt.timezone.utc
 
 
 def get_system_time_block():
@@ -8,7 +17,7 @@ def get_system_time_block():
     Called fresh on every single request — never cached.
     Pre-computes all date strings so Claude never calculates dates.
     """
-    et = ZoneInfo('America/Toronto')
+    et = _get_tz()
     now = datetime.now(et)
     today = now.date()
     tomorrow = today + timedelta(days=1)
