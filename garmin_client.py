@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 # Railway servers run UTC — always derive "today" from Montreal time
-_MONTREAL = ZoneInfo("America/Toronto")
+_MONTREAL = None  # initialized lazily — see _get_montreal()
 
 load_dotenv()
 
@@ -28,7 +28,7 @@ def authenticate():
 
 def get_readiness_data(days_back=1):
     client = authenticate()
-    target = datetime.now(_MONTREAL).date() - timedelta(days=days_back)
+    target = datetime.now(_montreal()).date() - timedelta(days=days_back)
     date_str = target.isoformat()
     username = client.username
     print(f"Fetching readiness data for {date_str} (user: {username})")

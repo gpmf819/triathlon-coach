@@ -57,7 +57,7 @@ from config import (
     weeks_to_race,
 )
 
-_MONTREAL = ZoneInfo("America/Toronto")
+_MONTREAL = None  # initialized lazily — see _get_montreal()
 
 
 # ─── INTERVALS.ICU HELPERS ───────────────────────────────────────────────────
@@ -82,7 +82,7 @@ def _get_tomorrow_workout():
     Returns a dict with name, sport, description, event_id — or None if nothing planned.
     """
     cfg      = _icu_cfg()
-    tomorrow = (datetime.now(_MONTREAL).date() + timedelta(days=1)).isoformat()
+    tomorrow = (datetime.now(_montreal()).date() + timedelta(days=1)).isoformat()
 
     r = requests.get(
         f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/events",
@@ -112,7 +112,7 @@ def _get_today_activity():
     Returns a compact summary dict, or None if nothing recorded today.
     """
     cfg   = _icu_cfg()
-    today = datetime.now(_MONTREAL).date().isoformat()
+    today = datetime.now(_montreal()).date().isoformat()
 
     r = requests.get(
         f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/activities",
@@ -152,8 +152,8 @@ def _get_current_tsb():
     Returns a float or None.
     """
     cfg     = _icu_cfg()
-    today   = datetime.now(_MONTREAL).date().isoformat()
-    two_ago = (datetime.now(_MONTREAL).date() - timedelta(days=2)).isoformat()
+    today   = datetime.now(_montreal()).date().isoformat()
+    two_ago = (datetime.now(_montreal()).date() - timedelta(days=2)).isoformat()
 
     r = requests.get(
         f"{cfg['base_url']}/athlete/{cfg['athlete_id']}/wellness",
@@ -272,7 +272,7 @@ def _generate_briefing(tomorrow_workout, today_activity, tsb):
     else:
         tomorrow_ctx = "Tomorrow's planned workout: none scheduled"
 
-    tomorrow_date = (datetime.now(_MONTREAL).date() + timedelta(days=1)).strftime("%A %B %d")
+    tomorrow_date = (datetime.now(_montreal()).date() + timedelta(days=1)).strftime("%A %B %d")
 
     system = f"""You are {ATHLETE_NAME}'s triathlon coach. Write his evening briefing message.
 
@@ -579,7 +579,7 @@ def _execute_modification(pending_mod, phone_number, conversations):
     if intent in ("SWAP", "SCALE"):
         new_name  = pending_mod.get("proposed_name") or "Updated workout"
         new_desc  = pending_mod.get("proposed_desc") or ""
-        date_str  = pending_mod.get("date") or (datetime.now(_MONTREAL).date() + timedelta(days=1)).isoformat()
+        date_str  = pending_mod.get("date") or (datetime.now(_montreal()).date() + timedelta(days=1)).isoformat()
 
         if event_id:
             try:

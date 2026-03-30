@@ -124,9 +124,14 @@ def get_cached():
 
 
 def build_system_prompt(workout_library_text):
-    from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    _today = _dt.now(ZoneInfo('America/Toronto')).date()
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo('America/Toronto')
+    except Exception:
+        import datetime
+        _tz = datetime.timezone.utc
+    _today = _dt.now(_tz).date()
     weeks_to_race = (RACE_DATE - _today).days // 7
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
@@ -326,9 +331,13 @@ def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, use
     """Build the live data context block."""
     # Always use Montreal time — date.today() returns UTC on Railway and would
     # disagree with get_system_time_block() around midnight ET
-    from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    _et = ZoneInfo('America/Toronto')
+    try:
+        from zoneinfo import ZoneInfo
+        _et = ZoneInfo('America/Toronto')
+    except Exception:
+        import datetime
+        _et = datetime.timezone.utc
     today_date = _dt.now(_et).date()
     tomorrow_date = today_date + timedelta(days=1)
 

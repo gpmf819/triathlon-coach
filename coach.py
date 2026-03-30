@@ -121,9 +121,14 @@ def get_recommendation(garmin_data, intervals_data, athlete_profile=None):
     intervals_summary = summarize_intervals(intervals_data)
 
     # Dynamic race countdown — use Montreal time to stay consistent with [SYSTEM_TIME]
-    from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    _today = _dt.now(ZoneInfo('America/Toronto')).date()
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo('America/Toronto')
+    except Exception:
+        import datetime
+        _tz = datetime.timezone.utc
+    _today = _dt.now(_tz).date()
     race_date = date(2026, 6, 20)
     weeks_to_race = (race_date - _today).days // 7
     days_to_race = (race_date - _today).days
@@ -407,9 +412,14 @@ def get_weekly_plan(garmin_summary, intervals_summary, ctl_data, weekly):
 
     phase = get_current_phase_targets()
     tss_min, tss_max = phase['tss_target']
-    from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    weeks_to_race = (date(2026, 6, 20) - _dt.now(ZoneInfo('America/Toronto')).date()).days // 7
+    try:
+        from zoneinfo import ZoneInfo
+        _tz = ZoneInfo('America/Toronto')
+    except Exception:
+        import datetime as _datetime
+        _tz = _datetime.timezone.utc
+    weeks_to_race = (date(2026, 6, 20) - _dt.now(_tz).date()).days // 7
 
     prompt = f"""{get_system_time_block()}
 

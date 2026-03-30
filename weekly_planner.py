@@ -51,7 +51,16 @@ from config import (
     is_race_specific_window,
 )
 
-_MONTREAL = ZoneInfo("America/Toronto")
+_MONTREAL = None  # initialized lazily — see _montreal()
+def _montreal():
+    """Return Montreal/Toronto timezone, loading tzdata lazily."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("America/Toronto")
+    except Exception:
+        import datetime
+        return datetime.timezone.utc
+
 
 
 # ─── INTERVALS.ICU HELPERS ───────────────────────────────────────────────────
@@ -160,7 +169,7 @@ def pull_planning_data():
     Raises on hard failures (Intervals.icu down).
     """
     cfg   = _icu_cfg()
-    today = datetime.now(_MONTREAL).date()
+    today = datetime.now(_montreal()).date()
 
     # Wellness: last 3 days to get the freshest CTL/ATL/TSB
     wellness_oldest = (today - timedelta(days=3)).isoformat()
@@ -324,7 +333,7 @@ def _build_claude_prompt(data):
     race_window = data["race_specific_window"]
 
     # Next Monday as the plan start
-    today      = datetime.now(_MONTREAL).date()
+    today      = datetime.now(_montreal()).date()
     days_to_monday = (7 - today.weekday()) % 7
     if days_to_monday == 0:
         days_to_monday = 7
@@ -641,7 +650,7 @@ def generate_weekly_plan(overwrite_if_exists=False):
     returns success=False with a message explaining that — the caller (Flask route)
     should ask the athlete before re-running with overwrite_if_exists=True.
     """
-    today       = datetime.now(_MONTREAL).date()
+    today       = datetime.now(_montreal()).date()
     days_to_mon = (7 - today.weekday()) % 7
     if days_to_mon == 0:
         days_to_mon = 7
