@@ -57,7 +57,7 @@ from config import (
     weeks_to_race,
 )
 
-_MONTREAL = ZoneInfo("America/Montreal")
+_MONTREAL = ZoneInfo("America/Toronto")
 
 
 # ─── INTERVALS.ICU HELPERS ───────────────────────────────────────────────────

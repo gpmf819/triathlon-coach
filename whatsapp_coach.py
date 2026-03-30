@@ -126,7 +126,7 @@ def get_cached():
 def build_system_prompt(workout_library_text):
     from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    _today = _dt.now(ZoneInfo('America/Montreal')).date()
+    _today = _dt.now(ZoneInfo('America/Toronto')).date()
     weeks_to_race = (RACE_DATE - _today).days // 7
     phase_name, phase_description = get_training_phase(weeks_to_race)
 
@@ -328,7 +328,7 @@ def build_context_block(garmin_summary, intervals_summary, weekly, ctl_data, use
     # disagree with get_system_time_block() around midnight ET
     from zoneinfo import ZoneInfo
     from datetime import datetime as _dt
-    _et = ZoneInfo('America/Montreal')
+    _et = ZoneInfo('America/Toronto')
     today_date = _dt.now(_et).date()
     tomorrow_date = today_date + timedelta(days=1)
 

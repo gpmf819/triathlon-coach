@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 # Railway servers run UTC — always derive "today" from Montreal time
-_MONTREAL = ZoneInfo("America/Montreal")
+_MONTREAL = ZoneInfo("America/Toronto")
 
 load_dotenv()
 

@@ -8,7 +8,7 @@ def get_system_time_block():
     Called fresh on every single request — never cached.
     Pre-computes all date strings so Claude never calculates dates.
     """
-    et = ZoneInfo('America/Montreal')
+    et = ZoneInfo('America/Toronto')
     now = datetime.now(et)
     today = now.date()
     tomorrow = today + timedelta(days=1)

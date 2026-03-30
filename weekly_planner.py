@@ -51,7 +51,7 @@ from config import (
     is_race_specific_window,
 )
 
-_MONTREAL = ZoneInfo("America/Montreal")
+_MONTREAL = ZoneInfo("America/Toronto")
 
 
 # ─── INTERVALS.ICU HELPERS ───────────────────────────────────────────────────
